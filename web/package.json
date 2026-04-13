@@ -8,8 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "node ..\\scripts\\kill-manager-before-dev.cjs && cd ..\\src-tauri && node ..\\web\\node_modules\\@tauri-apps\\cli\\tauri.js dev -- --no-default-features",
-    "tauri:build": "node ..\\scripts\\kill-manager-before-dev.cjs && cd ..\\src-tauri && node ..\\web\\node_modules\\@tauri-apps\\cli\\tauri.js build"
+    "tauri:dev": "tauri dev -- --no-default-features",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.9",
