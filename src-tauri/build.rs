@@ -165,7 +165,10 @@ fn main() {
     }
 
     // ── 2. 必需打包文件断言（仅 release 模式）─────────────────────────────
-    if is_release {
+    // Skip if SKIP_BUNDLED_CHECK=true (set by CI for cross-platform builds)
+    let skip_check = std::env::var("SKIP_BUNDLED_CHECK").ok().map(|v| v == "true").unwrap_or(false);
+
+    if is_release && !skip_check {
         let mut missing_files: Vec<String> = Vec::new();
 
         // 2a. Build the actual bundle list with platform-specific filenames
