@@ -1,0 +1,16 @@
+{
+  "platforms": {
+    "windows": {
+      "target": "x86_64-pc-windows-msvc",
+      "outputDir": "win",
+      "buildCommand": "npm run tauri:build",
+      "artifactDir": "src-tauri\\target\\release"
+    },
+    "macos": {
+      "target": "aarch64-apple-darwin",
+      "outputDir": "mac",
+      "buildCommand": "npm run tauri:build -- --target aarch64-apple-darwin",
+      "artifactDir": "src-tauri\\target\\aarch64-apple-darwin\\release"
+    }
+  }
+}

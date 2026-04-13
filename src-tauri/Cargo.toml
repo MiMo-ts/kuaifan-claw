@@ -1,0 +1,59 @@
+[package]
+name = "快泛claw"
+version = "1.0.1"
+description = "快泛claw - 一站式安装与管理系统"
+authors = ["快泛科技"]
+edition = "2021"
+
+# 默认启用 Tauri 内置资源协议（custom-protocol），否则 `cargo build --release` 会一直走 devUrl（localhost:5173），
+# 未开 Vite 时出现 ERR_CONNECTION_REFUSED。开发时用 `tauri dev -- --no-default-features` 关闭本 feature，走 Vite。
+[features]
+default = ["tauri-custom-protocol"]
+tauri-custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.1", features = ["tray-icon", "custom-protocol"] }
+# 防止多开：每多一个进程就多一个托盘图标（关窗仅隐藏时尤甚）
+tauri-plugin-single-instance = "2"
+tauri-plugin-shell = "2.0"
+tauri-plugin-process = "2.0"
+tauri-plugin-fs = "2.0"
+tauri-plugin-dialog = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.41", features = ["full"] }
+tokio-stream = "0.1"
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "connect",
+    "stream",
+] }
+futures-util = { version = "0.3", default-features = false, features = [
+    "sink",
+    "std",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+anyhow = "1.0"
+thiserror = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6.0"
+zip = "2.2"
+flate2 = "1.0"
+tar = "0.4"
+hostname = "0.4"
+num_cpus = "1.16"
+serde_yaml = "0.9"
+urlencoding = "2.1"
+uuid = { version = "1.0", features = ["v4"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
+
+[dev-dependencies]
+tempfile = "3.14"
