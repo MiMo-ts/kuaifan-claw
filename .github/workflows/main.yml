@@ -11,15 +11,19 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
+      - name: Install Node.js
+        run: |
+          curl -fsSL https://nodejs.org/dist/v18.20.8/node-v18.20.8-win-x64.zip -o nodejs.zip
+          Expand-Archive nodejs.zip -DestinationPath .
+          echo "$PWD\node-v18.20.8-win-x64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+        shell: powershell
 
       - name: Install dependencies
         run: npm install
@@ -37,15 +41,18 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
+      - name: Install Node.js
+        run: |
+          curl -fsSL https://nodejs.org/dist/v18.20.8/node-v18.20.8-darwin-x64.tar.gz -o nodejs.tar.gz
+          tar -xzf nodejs.tar.gz
+          echo "$PWD/node-v18.20.8-darwin-x64/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
         run: npm install
@@ -63,15 +70,18 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
+      - name: Install Node.js
+        run: |
+          curl -fsSL https://nodejs.org/dist/v18.20.8/node-v18.20.8-linux-x64.tar.xz -o nodejs.tar.xz
+          tar -xJf nodejs.tar.xz
+          echo "$PWD/node-v18.20.8-linux-x64/bin" >> $GITHUB_PATH
 
       - name: Install system dependencies
         run: |
