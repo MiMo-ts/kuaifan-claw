@@ -32,7 +32,6 @@ jobs:
       - name: Fix frontendDist path
         run: |
           sed -i 's|"frontendDist": "../dist"|"frontendDist": "./dist"|g' web/src-tauri/tauri.conf.json
-        shell: bash
 
       - name: Install dependencies
         run: npm install
@@ -42,9 +41,11 @@ jobs:
         run: npm run build
         working-directory: web
 
+      - name: Copy dist to src-tauri
+        run: cp -r web/dist web/src-tauri/dist
+
       - name: Build Tauri app
         run: cd web/src-tauri && npx tauri build
-        shell: bash
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -73,7 +74,6 @@ jobs:
       - name: Fix frontendDist path
         run: |
           sed -i 's|"frontendDist": "../dist"|"frontendDist": "./dist"|g' web/src-tauri/tauri.conf.json
-        shell: bash
 
       - name: Install dependencies
         run: npm install
@@ -83,11 +83,13 @@ jobs:
         run: npm run build
         working-directory: web
 
+      - name: Copy dist to src-tauri
+        run: cp -r web/dist web/src-tauri/dist
+
       - name: Build Tauri app (macOS)
         run: |
           cd web/src-tauri
           npx @tauri-apps/cli build --target aarch64-apple-darwin
-        shell: bash
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
