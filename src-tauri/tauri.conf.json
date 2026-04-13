@@ -6,15 +6,15 @@
   "build": {
     "beforeDevCommand": {
       "script": "npm run dev",
-      "cwd": "../web",
+      "cwd": ".",
       "wait": false
     },
     "beforeBuildCommand": {
       "script": "npm run build",
-      "cwd": "../web"
+      "cwd": "."
     },
     "devUrl": "http://127.0.0.1:5173",
-    "frontendDist": "../web/dist"
+    "frontendDist": "./dist"
   },
   "app": {
     "windows": [
