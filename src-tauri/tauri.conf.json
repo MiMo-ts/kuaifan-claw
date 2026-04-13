@@ -4,11 +4,7 @@
   "version": "1.0.1",
   "identifier": "com.kuaiman.manager",
   "build": {
-    "beforeDevCommand": {
-      "script": "npm run dev",
-      "cwd": "..",
-      "wait": false
-    },
+    "beforeDevCommand": null,
     "beforeBuildCommand": null,
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../dist"
