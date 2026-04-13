@@ -9,10 +9,7 @@
       "cwd": "..",
       "wait": false
     },
-    "beforeBuildCommand": {
-      "script": "npm run build",
-      "cwd": ".."
-    },
+    "beforeBuildCommand": null,
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../dist"
   },

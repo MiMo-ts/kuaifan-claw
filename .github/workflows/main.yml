@@ -38,7 +38,7 @@ jobs:
         working-directory: web
 
       - name: Build Tauri app
-        run: cd web/src-tauri && npm run tauri:build
+        run: cd web/src-tauri && npx tauri build
         shell: bash
 
       - name: Upload Windows artifact
@@ -76,7 +76,7 @@ jobs:
       - name: Build Tauri app (macOS)
         run: |
           cd web/src-tauri
-          npm run tauri:build -- --target aarch64-apple-darwin 2>&1 | head -100
+          npx @tauri-apps/cli build --target aarch64-apple-darwin
         shell: bash
 
       - name: Upload macOS artifact
