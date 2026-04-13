@@ -29,6 +29,11 @@ jobs:
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
 
+      - name: Fix frontendDist path
+        run: |
+          sed -i 's|"frontendDist": "../dist"|"frontendDist": "./dist"|g' web/src-tauri/tauri.conf.json
+        shell: bash
+
       - name: Install dependencies
         run: npm install
         working-directory: web
@@ -64,6 +69,11 @@ jobs:
 
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
+
+      - name: Fix frontendDist path
+        run: |
+          sed -i 's|"frontendDist": "../dist"|"frontendDist": "./dist"|g' web/src-tauri/tauri.conf.json
+        shell: bash
 
       - name: Install dependencies
         run: npm install
