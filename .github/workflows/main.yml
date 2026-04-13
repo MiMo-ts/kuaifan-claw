@@ -64,9 +64,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
-      - name: Install Rust target
-        run: rustup target add aarch64-apple-darwin
-
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
 
@@ -81,14 +78,14 @@ jobs:
       - name: Copy dist to src-tauri
         run: cp -r web/dist web/src-tauri/dist
 
-      - name: Build Tauri app (macOS)
+      - name: Build Tauri app (macOS native)
         run: |
           cd web/src-tauri
-          npx @tauri-apps/cli build --target aarch64-apple-darwin
+          npx tauri build
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-package
-          path: web/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          path: web/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: ignore
