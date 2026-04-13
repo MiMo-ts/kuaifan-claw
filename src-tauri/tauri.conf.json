@@ -37,7 +37,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi", "dmg"],
+    "targets": ["nsis"],
     "shortDescription": "快泛claw 一站式安装与管理工具",
     "longDescription": "快泛claw — 一站式安装与管理系统，支持多平台、多通道机器人网关管理。",
     "category": "DeveloperTool",
