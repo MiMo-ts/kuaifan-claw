@@ -70,11 +70,13 @@ jobs:
         run: |
           mkdir -p web/src-tauri/bundled-env
           curl -L -o web/src-tauri/bundled-env/node-v22.14.0-darwin-arm64.tar.gz https://nodejs.org/dist/v22.14.0/node-v22.14.0-darwin-arm64.tar.gz
+          ls -la web/src-tauri/bundled-env/
         shell: bash
 
       - name: Download MinGit for macOS arm64
         run: |
           curl -L -o web/src-tauri/bundled-env/mingit-2.53.0-arm64.tar.gz https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.1/PortableGit-2.53.0-64-bit.tar.gz
+          ls -la web/src-tauri/bundled-env/
         shell: bash
 
       - name: Install dependencies
