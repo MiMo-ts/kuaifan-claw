@@ -1,4 +1,4 @@
-name: Build Windows
+name: Build App
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -10,29 +10,52 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Show directory structure
+        run: ls -la
+      - name: Copy src-tauri
+        run: cp -r src-tauri src-tauri-temp && mv src-tauri-temp src-tauri
+      - name: Install deps
+        run: npm install
+        working-directory: web
+      - name: Build frontend
+        run: npm run build
+        working-directory: web
+      - name: Show dist
+        run: ls -la web/dist
+      - name: Copy dist
+        run: mkdir -p src-tauri/dist && cp -r web/dist/* src-tauri/dist/
+      - name: Show src-tauri
+        run: ls -la src-tauri/dist
+      - name: Build Tauri verbose
+        run: cd src-tauri && cargo build --release -vv 2>&1 | tail -100
+      - name: Build Tauri
+        run: npx @tauri-apps/cli build
+        working-directory: src-tauri
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-package
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+
+  build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
-
-      - run: npm install
+      - run: npm install && npm run build
         working-directory: web
-
-      - run: npm run build
-        working-directory: web
-
       - run: mkdir -p src-tauri/dist && cp -r web/dist/* src-tauri/dist/
-
       - run: npx @tauri-apps/cli build
         working-directory: src-tauri
-
       - uses: actions/upload-artifact@v4
         with:
           name: windows-package
           path: src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: ignore
