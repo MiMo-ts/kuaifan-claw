@@ -1,0 +1,437 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { invoke } from '@tauri-apps/api/core';
+import toast from 'react-hot-toast';
+import {
+  Settings, FolderOpen, Database, RefreshCw, Play, Square,
+  ChevronRight, Plus, Bot, Plug, BarChart3, ArrowLeft, Monitor, Loader2,
+} from 'lucide-react';
+import { useAppStore } from '../stores/appStore';
+
+interface GatewayStatus {
+  running: boolean;
+  version?: string;
+  port: number;
+  uptime_seconds: number;
+  memory_mb: number;
+  instances_running?: number;
+}
+
+interface Instance {
+  id: string;
+  name: string;
+  enabled: boolean;
+  robot_id: string;
+  channel_type: string;
+  message_count: number;
+}
+
+export default function HomePage() {
+  const navigate = useNavigate();
+  const { wizardCompleted, gatewayRunning, setGatewayRunning } = useAppStore();
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dataDir, setDataDir] = useState<string>('');
+  const [hydrated, setHydrated] = useState(false);
+  const [defaultModel, setDefaultModel] = useState<{provider?: string; model_name?: string} | null>(null);
+  /** 启动/停止网关进行中，避免重复点击并配合 Toast 提示 */
+  const [gatewayBusy, setGatewayBusy] = useState(false);
+
+  useEffect(() => {
+    if (useAppStore.persist.hasHydrated()) {
+      setHydrated(true);
+      return;
+    }
+    const unsub = useAppStore.persist.onFinishHydration(() => setHydrated(true));
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    invoke<string>('get_data_dir').then(d => setDataDir(d)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (!wizardCompleted) {
+      navigate('/', { replace: true });
+      return;
+    }
+    loadData();
+  }, [hydrated, wizardCompleted, navigate]);
+
+  /** 网关进程崩溃或端口被占后，状态文件可能仍显示「运行中」；定时探测 TCP 与状态文件，避免界面长期不同步 */
+  useEffect(() => {
+    if (!hydrated || !wizardCompleted) return;
+    const poll = async () => {
+      if (gatewayBusy) return;
+      try {
+        const status = await invoke<GatewayStatus>('get_gateway_status');
+        setGatewayStatus(status);
+        setGatewayRunning(status.running);
+      } catch {
+        /* 忽略瞬时错误，避免打断操作 */
+      }
+    };
+    const id = window.setInterval(poll, 5000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void poll();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [hydrated, wizardCompleted, gatewayBusy]);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [status, instList, dm] = await Promise.all([
+        invoke<GatewayStatus>('get_gateway_status'),
+        invoke<Instance[]>('list_instances'),
+        invoke<{provider?: string; model_name?: string}>('get_default_model').catch(() => null),
+      ]);
+      setGatewayStatus(status);
+      setGatewayRunning(status.running);
+      setInstances(instList);
+      setDefaultModel(dm);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`加载数据失败：${msg}`);
+      console.error('Load data error:', e);
+    }
+    setLoading(false);
+  };
+
+  const handleStartGateway = async () => {
+    if (gatewayBusy) return;
+    setGatewayBusy(true);
+    const tid = toast.loading(
+      '正在启动网关…（同步配置、通道插件自检、清端口、等监听。插件齐全时约 10～40 秒；若正在补全微信等插件的 npm/编译，首启可达数分钟，请查看 data/logs 或设置里网关日志）'
+    );
+    try {
+      const result = await invoke<string>('start_gateway');
+      setGatewayRunning(true);
+      setGatewayStatus(prev => (prev ? { ...prev, running: true } : null));
+      toast.success(result || '网关已启动', { id: tid, duration: 4000 });
+      await loadData();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('未配置默认大模型') || msg.includes('models.yaml')) {
+        toast.error(
+          <span>
+            网关启动失败：{msg.includes('未配置默认大模型') ? '未配置默认大模型' : '缺少模型配置'}
+            <br />
+            <button
+              className="underline mt-1 text-blue-600"
+              onClick={() => navigate('/models')}
+            >
+              前往「大模型配置」→
+            </button>
+          </span>,
+          { id: tid, duration: 8000 }
+        );
+      } else {
+        toast.error(`启动失败：${msg}`, { id: tid, duration: 6000 });
+      }
+      console.error('Start gateway error:', e);
+    } finally {
+      setGatewayBusy(false);
+    }
+  };
+
+  const handleStopGateway = async () => {
+    if (gatewayBusy) return;
+    setGatewayBusy(true);
+    const tid = toast.loading('正在停止网关…（结束进程并释放端口，约 1～5 秒）');
+    try {
+      const result = await invoke<string>('stop_gateway');
+      setGatewayRunning(false);
+      setGatewayStatus(prev => (prev ? { ...prev, running: false } : null));
+      toast.success(result || '网关已停止', { id: tid, duration: 4000 });
+      await loadData();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`停止失败：${msg}`, { id: tid, duration: 6000 });
+      console.error('Stop gateway error:', e);
+    } finally {
+      setGatewayBusy(false);
+    }
+  };
+
+  const formatUptime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return h > 0 ? `${h}小时${m}分钟` : `${m}分钟`;
+  };
+
+  if (!hydrated) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-600">加载中...</p>
+      </div>
+    );
+  }
+
+  if (!wizardCompleted) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-600">正在进入向导...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => navigate('/wizard')}
+              title="重新进入向导"
+              className="p-2 text-gray-500 hover:text-gray-700"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">快泛claw</h1>
+              <p className="text-sm text-gray-500">一站式安装与管理系统</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/settings')}
+            className="p-2 text-gray-500 hover:text-gray-700"
+            title="设置"
+          >
+            <Settings className="w-5 h-5" />
+          </button>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        {/* Gateway status banner — always visible, color-coded */}
+        <div className={`rounded-xl border-l-4 shadow-sm mb-6 p-4 flex items-center gap-4
+          ${gatewayRunning
+            ? 'bg-green-50 border-green-500'
+            : 'bg-amber-50 border-amber-400'}`}
+        >
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0
+            ${gatewayRunning ? 'bg-green-100' : 'bg-amber-100'}`}>
+            <div className={`w-3 h-3 rounded-full ${gatewayRunning ? 'bg-green-500' : 'bg-amber-400'}`} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className={`font-semibold text-base ${gatewayRunning ? 'text-green-800' : 'text-amber-800'}`}>
+              OpenClaw 网关 · {gatewayRunning ? '运行中' : '已停止'}
+            </div>
+            {gatewayRunning && gatewayStatus && (
+              <div className="text-sm text-green-700 mt-0.5">
+                端口 {gatewayStatus.port} · 已运行 {formatUptime(gatewayStatus.uptime_seconds)} · 内存 {gatewayStatus.memory_mb.toFixed(0)} MB · {gatewayStatus.instances_running ?? instances.length} 个实例
+                {gatewayStatus.version && <span className="ml-2 text-green-600/70">v{gatewayStatus.version}</span>}
+              </div>
+            )}
+            {!gatewayRunning && (
+              <div className="text-sm text-amber-700 mt-0.5">
+                点击下方「启动网关」开启 OpenClaw-CN 网关进程
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 shrink-0">
+            {gatewayRunning ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    invoke<string>('open_openclaw_console')
+                      .then((msg) => toast.success(msg || '已打开'))
+                      .catch((e) => toast.error(String(e)));
+                  }}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 flex items-center gap-1.5"
+                >
+                  <Monitor className="w-4 h-4" />
+                  控制台
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStopGateway}
+                  disabled={gatewayBusy}
+                  className="px-3 py-1.5 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {gatewayBusy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Square className="w-4 h-4" />
+                  )}
+                  {gatewayBusy ? '停止中…' : '停止'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStartGateway}
+                disabled={gatewayBusy}
+                className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {gatewayBusy ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Play className="w-4 h-4" />
+                )}
+                {gatewayBusy ? '启动中…' : '启动网关'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={loadData}
+              disabled={gatewayBusy}
+              title={gatewayBusy ? '网关操作中，请稍候' : '刷新状态'}
+              className="px-3 py-1.5 bg-white border border-gray-200 text-gray-600 text-sm rounded-lg hover:bg-gray-50 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <RefreshCw className={`w-4 h-4 ${gatewayBusy ? 'opacity-50' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {/* Help hint when gateway is running */}
+        {gatewayRunning && (
+          <div className="mb-6 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-700 space-y-1">
+            <div className="font-medium">使用提示</div>
+            <div className="flex items-start gap-2">
+              <span className="font-mono text-xs bg-blue-100 px-1.5 py-0.5 rounded shrink-0 mt-0.5">LLM 无回复</span>
+              <span>请确认已在「<button type="button" onClick={() => navigate('/models')} className="underline hover:no-underline">大模型配置</button>」保存并<strong>重启网关</strong>后，模型调用才生效。</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="font-mono text-xs bg-blue-100 px-1.5 py-0.5 rounded shrink-0 mt-0.5">Control UI token_mismatch</span>
+              <span>这是网关会话 Token（与 LLM API Key 不同），请在控制台右上角设置中填入与管理器一致的 Token，或重新启动网关生成新 Token。</span>
+            </div>
+          </div>
+        )}
+
+        {defaultModel?.provider && defaultModel?.model_name && (
+          <div className="mb-6 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-700 flex items-center justify-between">
+            <div>
+              当前默认模型：<span className="font-medium">{defaultModel.provider}</span>
+              {' / '}
+              <span className="font-medium">{defaultModel.model_name}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/models')}
+              className="underline hover:no-underline text-blue-600"
+            >
+              修改
+            </button>
+          </div>
+        )}
+
+        {/* Quick Actions */}
+        <div className="grid grid-cols-2 md:grid-cols-8 gap-4 mb-6">
+          {[
+            { icon: Plus, label: '创建实例', path: '/instances/new', color: 'bg-blue-500' },
+            { icon: Bot, label: '机器人商店', path: '/robots', color: 'bg-purple-500' },
+            { icon: Plug, label: '聊天插件', path: '/plugins', color: 'bg-orange-500' },
+            { icon: Database, label: '模型配置', path: '/models', color: 'bg-teal-500' },
+            {
+              icon: FolderOpen, label: 'OpenClaw配置', path: null,
+              action: 'open_openclaw_config', color: 'bg-gray-500',
+            },
+            {
+              icon: FolderOpen, label: '管理端配置', path: dataDir ? `${dataDir}/config` : null,
+              action: 'open_folder', color: 'bg-gray-400',
+            },
+            { icon: Database, label: '备份恢复', path: '/backup', color: 'bg-indigo-500' },
+            { icon: BarChart3, label: 'Token用量', path: '/usage', color: 'bg-green-500' },
+          ].map((item, i) => (
+            <button
+              type="button"
+              key={i}
+              onClick={() => {
+                if (item.action === 'open_openclaw_config') {
+                  invoke<string>('open_openclaw_config')
+                    .then((msg) => toast.success(msg || '已打开 OpenClaw 配置文件'))
+                    .catch((e) => {
+                      toast.error(String(e));
+                      console.error(e);
+                    });
+                } else if (item.action === 'open_folder' && item.path) {
+                  invoke('open_folder', { path: item.path })
+                    .then(() => toast.success('已打开文件夹'))
+                    .catch((e) => {
+                      toast.error(String(e));
+                      console.error(e);
+                    });
+                } else if (item.path) {
+                  navigate(item.path);
+                }
+              }}
+              className={`${item.color} text-white rounded-xl p-4 flex flex-col items-center hover:opacity-90 transition-opacity`}
+            >
+              <item.icon className="w-8 h-8 mb-2" />
+              <span className="text-sm font-medium">{item.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Instances List */}
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900">运行中的实例</h2>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => navigate('/instances')}
+                className="text-blue-500 hover:text-blue-600 text-sm flex items-center"
+              >
+                查看全部 <ChevronRight className="w-4 h-4 ml-1" />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/instances/new')}
+                className="text-sm text-gray-500 hover:text-gray-700 flex items-center"
+              >
+                <Plus className="w-4 h-4 mr-1" />
+                新建
+              </button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="text-center py-8 text-gray-500">加载中...</div>
+          ) : instances.length === 0 ? (
+            <div className="text-center py-8">
+              <div className="text-gray-400 mb-4">暂无实例</div>
+              <button
+                type="button"
+                onClick={() => navigate('/instances/new')}
+                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+              >
+                创建第一个实例
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {instances.slice(0, 5).map(inst => (
+                <div key={inst.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                  <div className="flex items-center">
+                    <div className={`w-2 h-2 rounded-full mr-3 ${inst.enabled ? 'bg-green-500' : 'bg-red-500'}`} />
+                    <div>
+                      <div className="font-medium text-gray-900">{inst.name}</div>
+                      <div className="text-sm text-gray-500">{inst.robot_id} · {inst.channel_type}</div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm text-gray-500">消息: {inst.message_count}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
