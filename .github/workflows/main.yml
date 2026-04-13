@@ -30,7 +30,6 @@ jobs:
 
       - name: Download Node.js bundle
         run: |
-          mkdir -p web/src-tauri/bundled-env
           curl -L -o web/src-tauri/bundled-env/node-v22.14.0-win-x64.zip https://npmmirror.com/mirrors/node/v22.14.0/node-v22.14.0-win-x64.zip
         shell: bash
 
@@ -72,10 +71,14 @@ jobs:
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
 
-      - name: Download Node.js bundle
+      - name: Download Node.js bundle (arm64)
         run: |
-          mkdir -p web/src-tauri/bundled-env
           curl -L -o web/src-tauri/bundled-env/node-v22.14.0-darwin-arm64.tar.gz https://npmmirror.com/mirrors/node/v22.14.0/node-v22.14.0-darwin-arm64.tar.gz
+        shell: bash
+
+      - name: Download MinGit (arm64)
+        run: |
+          curl -L -o web/src-tauri/bundled-env/mingit-2.53.0-arm64.tar.gz https://npmmirror.com/mirrors/git-for-windows/portable/2.53.0.vista/PortableGit-2.53.0-64-bit.tar.gz
         shell: bash
 
       - name: Install dependencies
@@ -130,10 +133,14 @@ jobs:
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
 
-      - name: Download Node.js bundle
+      - name: Download Node.js bundle (x64)
         run: |
-          mkdir -p web/src-tauri/bundled-env
           curl -L -o web/src-tauri/bundled-env/node-v22.14.0-linux-x64.tar.gz https://npmmirror.com/mirrors/node/v22.14.0/node-v22.14.0-linux-x64.tar.gz
+        shell: bash
+
+      - name: Download MinGit (x64)
+        run: |
+          curl -L -o web/src-tauri/bundled-env/mingit-2.53.0-64-bit.tar.gz https://npmmirror.com/mirrors/git-for-windows/portable/2.53.0.vista/PortableGit-2.53.0-64-bit.tar.gz
         shell: bash
 
       - name: Install dependencies
