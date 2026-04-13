@@ -6,12 +6,12 @@
   "build": {
     "beforeDevCommand": {
       "script": "npm run dev",
-      "cwd": ".",
+      "cwd": "..",
       "wait": false
     },
     "beforeBuildCommand": {
       "script": "npm run build",
-      "cwd": "."
+      "cwd": ".."
     },
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../dist"
