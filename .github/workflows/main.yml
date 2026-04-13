@@ -18,10 +18,13 @@ jobs:
         include:
           - os: windows-latest
             target: ''
+            ext: '.exe'
           - os: macos-latest
             target: aarch64-apple-darwin
+            ext: '.app'
           - os: ubuntu-24.04
             target: ''
+            ext: '.AppImage'
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -51,8 +54,29 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Copy Tauri config to web
+      - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
+
+      - name: Download bundles (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd web/src-tauri
+          pwsh -File ./download-bundles.ps1
+        shell: pwsh
+
+      - name: Download bundles (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd web/src-tauri
+          chmod +x scripts/download-bundles.sh
+          ./scripts/download-bundles.sh
+
+      - name: Download bundles (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd web/src-tauri
+          chmod +x scripts/download-bundles.sh
+          ./scripts/download-bundles.sh
 
       - name: Install dependencies
         run: npm install
@@ -65,8 +89,10 @@ jobs:
       - name: Build Tauri app
         run: |
           if [ "${{ matrix.target }}" != "" ]; then
+            cd web/src-tauri
             npm run tauri:build -- --target "${{ matrix.target }}"
           else
+            cd web/src-tauri
             npm run tauri:build
           fi
         working-directory: web
