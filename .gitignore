@@ -3,6 +3,7 @@
 /src-tauri/target-ci-test/
 /src-tauri/Cargo.lock
 /src-tauri/.cargo/
+/web/src-tauri/
 
 # Node.js / frontend
 /web/node_modules/
