@@ -16,20 +16,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
 
-      - name: Copy Tauri to web
-        run: cp -r src-tauri web/src-tauri
+      - name: Copy src-tauri to web
+        run: cp -r src-tauri web/
 
-      - name: Install dependencies
+      - name: Install npm deps
         run: npm install
         working-directory: web
 
@@ -38,36 +34,34 @@ jobs:
         working-directory: web
 
       - name: Copy dist to src-tauri
-        run: cp -r web/dist web/src-tauri/dist
+        run: cp -r web/dist src-tauri/
 
       - name: Build Tauri app
-        run: cd web/src-tauri && npx tauri build
+        run: cd src-tauri && npm run tauri:build
+        working-directory: web
+        shell: bash
 
-      - name: Upload Windows artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-package
-          path: web/src-tauri/target/release/bundle/nsis/*.exe
+          path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: ignore
 
   build-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
 
-      - name: Copy Tauri to web
-        run: cp -r src-tauri web/src-tauri
+      - name: Copy src-tauri to web
+        run: cp -r src-tauri web/
 
-      - name: Install dependencies
+      - name: Install npm deps
         run: npm install
         working-directory: web
 
@@ -76,16 +70,15 @@ jobs:
         working-directory: web
 
       - name: Copy dist to src-tauri
-        run: cp -r web/dist web/src-tauri/dist
+        run: cp -r web/dist src-tauri/
 
-      - name: Build Tauri app (macOS native)
-        run: |
-          cd web/src-tauri
-          npx tauri build
+      - name: Build Tauri app
+        run: cd src-tauri && npm run tauri:build
+        working-directory: web
 
-      - name: Upload macOS artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-package
-          path: web/src-tauri/target/release/bundle/dmg/*.dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: ignore
