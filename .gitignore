@@ -10,7 +10,6 @@
 /web/.vite/
 /web/.vercel/
 /web/.output/
-/web/package-lock.json
 
 # OS
 .DS_Store
