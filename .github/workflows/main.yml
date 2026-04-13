@@ -64,6 +64,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
+      - name: Install Rust target
+        run: rustup target add aarch64-apple-darwin
+
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
 
