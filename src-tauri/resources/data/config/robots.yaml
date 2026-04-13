@@ -1,0 +1,305 @@
+# ============================================================
+# 机器人配置库（仅作文档/人工参考；管理端运行时以 Rust 源码为准）
+#
+# 实际生效：`src-tauri/src/commands/robot.rs` 中 `builtin_robot_templates()`。
+# 本文件未被 Rust 读取；若与代码不一致，以代码为准。
+#
+# 设计原则：
+#   1. 所有模板 skill/MCP 均免费，无需付费 API Key
+#   2. 机器人名称、职能描述与 default_skills 完全对齐
+#   3. skill 下载目标仓库：LeoYeAI/openclaw-master-skills
+#
+# 免费 skill 速查：
+#   copywriter       → copywriting（纯 LLM 提示词，无需代码）
+#   doc_writer       → writing-plans（纯 LLM 提示词）
+#   video_script     → citedy-video-shorts（纯 LLM 提示词）
+#   ppt_generator    → writing-plans（纯 LLM 提示词）
+#   meeting_minutes   → writing-plans（纯 LLM 提示词）
+#   excel_analyzer   → excel-xlsx（SKILL.md，需 Python 环境）
+#   data_analysis    → data-analysis（SKILL.md，需 Python 环境）
+#   document_parser  → document-parser（SKILL.md，需 Python 环境）
+#   comic/novel/story → writing-skills（纯 LLM 提示词）
+#   product_selector → product-marketing-context（SKILL.md，LLM 免费）
+#   feishu_doc       → feishu-doc（有 index.js，需飞书 appId/secret）
+#   internal_comms   → internal-comms（SKILL.md，LLM 免费）
+#   git_commit       → git-commit（SKILL.md，免费）
+#
+# MCP 免费即用：browser / filesystem / fetch / sqlite（无需配置）
+#
+# 已移除（不可用 / 需付费 Key）：
+#   douyin_script → citedy-video-shorts（实际下载的是 tiktok-viral-predictor，
+#     内含硬编码假数据，README 写明 ¥39/月，属于付费服务）
+#   xiaohongshu_copy → xiaohongshu-mcp（只有 SKILL.md，无 index.js，
+#     需要用户手动下载 GitHub binary 并启动 MCP server，门槛极高）
+#   xiaohongshu_seo / xiaohongshu_hashtag → 只有 SKILL.md，无 index.js
+#   email_writer / calendar → 需 SMTP/IMAP 或 OAuth Key
+#   tushare / stock_news / quant_algo → 需付费行情 API Key
+#   taobao_api → 需淘宝开放平台 API Key
+# ============================================================
+
+robots: []
+
+robot_templates:
+  # ══════════════════════════════════════════════════════════
+  # 电商机器人（全部免费零门槛）
+  # ══════════════════════════════════════════════════════════
+
+  - id: "robot_ecom_001"
+    category: "电商机器人"
+    subcategory: "抖音/小红书带货"
+    name: "抖音/小红书带货助手"
+    description: "抖音/小红书平台带货全链路助手。热点检索 → 数据整理 → 文案/脚本生成 → Excel排期/PPT方案。全流程免费，零门槛。"
+    default_skills:
+      - "web_search"
+      - "copywriter"
+      - "doc_writer"
+      - "video_script"
+      - "excel_analyzer"
+      - "data_analysis"
+      - "ppt_generator"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["电商", "抖音", "小红书", "带货"]
+
+  - id: "robot_ecom_002"
+    category: "电商机器人"
+    subcategory: "淘宝天猫"
+    name: "淘宝天猫运营助手"
+    description: "淘宝/天猫/京东店铺运营助手。热点选品 → 数据抓取对比 → 活动策划 → Excel/PPT方案。免费零门槛。"
+    default_skills:
+      - "web_search"
+      - "copywriter"
+      - "doc_writer"
+      - "product_selector"
+      - "excel_analyzer"
+      - "data_analysis"
+      - "ppt_generator"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["电商", "淘宝", "天猫"]
+
+  # ══════════════════════════════════════════════════════════
+  # 社交媒体机器人（全部免费零门槛）
+  # ══════════════════════════════════════════════════════════
+
+  - id: "robot_social_001"
+    category: "社交媒体机器人"
+    subcategory: "小红书运营"
+    name: "小红书运营助手"
+    description: "小红书内容运营全链路。热点检索 → 数据对比分析 → 内容策划 → 排期/周报输出。免费零门槛。"
+    default_skills:
+      - "web_search"
+      - "copywriter"
+      - "doc_writer"
+      - "excel_analyzer"
+      - "data_analysis"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["小红书", "种草", "运营"]
+
+  - id: "robot_social_002"
+    category: "社交媒体机器人"
+    subcategory: "抖音内容"
+    name: "抖音内容创作助手"
+    description: "抖音短视频内容创作全链路。热点检索 → 脚本/分镜设计 → 数据对比 → 策划/复盘文档。免费零门槛。"
+    default_skills:
+      - "web_search"
+      - "copywriter"
+      - "video_script"
+      - "doc_writer"
+      - "excel_analyzer"
+      - "data_analysis"
+      - "ppt_generator"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["抖音", "短视频", "直播"]
+
+  - id: "robot_social_003"
+    category: "社交媒体机器人"
+    subcategory: "微信公众号"
+    name: "微信公众号助手"
+    description: "微信公众号内容创作与运营。热点检索 → 文章策划 → 数据复盘。免费零门槛。"
+    default_skills:
+      - "web_search"
+      - "copywriter"
+      - "doc_writer"
+      - "excel_analyzer"
+      - "data_analysis"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["公众号", "微信", "内容创作"]
+
+  # ══════════════════════════════════════════════════════════
+  # 金融股票机器人（免费资讯路线，无需量化 Key）
+  # ══════════════════════════════════════════════════════════
+
+  - id: "robot_stock_001"
+    category: "金融股票机器人"
+    subcategory: "A股资讯助手"
+    name: "A股资讯助手"
+    description: "A 股公开资讯整理与结构化输出。browser 抓取东方财富/新浪财经 → 研报解析 → 数据对比 → 报告。无需 Tushare/行情付费 API Key。"
+    default_skills:
+      - "web_search"
+      - "copywriter"
+      - "doc_writer"
+      - "excel_analyzer"
+      - "data_analysis"
+      - "document_parser"
+    default_mcp:
+      - "browser"
+      - "fetch"
+      - "filesystem"
+      - "sqlite"
+    tags: ["A股", "资讯", "报告"]
+
+  - id: "robot_stock_002"
+    category: "金融股票机器人"
+    subcategory: "数字货币"
+    name: "数字货币监控助手"
+    description: "加密货币公开资讯整理与情绪分析。browser 抓取 CoinMarketCap/Binance → 文档解析 → 数据对比 → 复盘。无需链上/行情付费 API Key。"
+    default_skills:
+      - "web_search"
+      - "copywriter"
+      - "doc_writer"
+      - "excel_analyzer"
+      - "data_analysis"
+      - "document_parser"
+    default_mcp:
+      - "browser"
+      - "fetch"
+      - "filesystem"
+      - "sqlite"
+    tags: ["数字货币", "BTC", "ETH"]
+
+  # ══════════════════════════════════════════════════════════
+  # 内容创作机器人（全部免费零门槛）
+  # ══════════════════════════════════════════════════════════
+
+  - id: "robot_content_001"
+    category: "内容创作机器人"
+    subcategory: "漫剧剧本"
+    name: "漫剧剧本生成器"
+    description: "分镜头剧本、对白生成、世界观设计。全免费，纯 LLM。"
+    default_skills:
+      - "comic_script"
+      - "novel_writer"
+      - "story_outline"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["漫剧", "剧本", "创作"]
+
+  - id: "robot_content_002"
+    category: "内容创作机器人"
+    subcategory: "小说创作"
+    name: "小说创作助手"
+    description: "小说大纲、章节创作、人物设定。全免费，纯 LLM。"
+    default_skills:
+      - "novel_writer"
+      - "story_outline"
+      - "copywriter"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["小说", "创作", "写作"]
+
+  # ══════════════════════════════════════════════════════════
+  # 办公效率机器人
+  # ══════════════════════════════════════════════════════════
+
+  - id: "robot_office_001"
+    category: "办公效率机器人"
+    subcategory: "企业文档"
+    name: "企业文档助手"
+    description: "日报周报、会议纪要、PPT大纲、PDF阅读/编辑、Word文档、Excel数据分析。全部免费，纯 LLM。"
+    default_skills:
+      - "doc_writer"
+      - "meeting_minutes"
+      - "ppt_generator"
+      - "excel_analyzer"
+      - "pdf_reader"
+      - "pdf_edit"
+      - "word_writer"
+      - "web_search"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["办公", "文档", "PDF", "Word", "Excel"]
+
+  - id: "robot_office_002"
+    category: "办公效率机器人"
+    subcategory: "企业服务"
+    name: "企业服务助手"
+    description: "飞书文档协作、本地 Excel/数据分析、文档解析、内部沟通稿、Git 摘要。配置飞书应用后可使用 Sheets/消息等插件。"
+    default_skills:
+      - "feishu_doc"
+      - "feishu_doc_collab"
+      - "excel_analyzer"
+      - "data_analysis"
+      - "document_parser"
+      - "internal_comms"
+      - "git_commit"
+      - "doc_writer"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["飞书", "数据分析", "协作"]
+
+  # ══════════════════════════════════════════════════════════
+  # 通用助手（全部免费零门槛）
+  # ══════════════════════════════════════════════════════════
+
+  - id: "robot_general_001"
+    category: "通用助手"
+    subcategory: "私人秘书"
+    name: "私人秘书"
+    description: "信息查询、任务整理与文档输出。全免费，纯 LLM + browser 网页抓取。"
+    default_skills:
+      - "web_search"
+      - "doc_writer"
+      - "copywriter"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["秘书", "日程", "效率"]
+
+  - id: "robot_general_002"
+    category: "通用助手"
+    subcategory: "智能客服"
+    name: "智能客服基础版"
+    description: "通用客服场景、FAQ 自动回复、问题分类。全免费，纯 LLM + browser 抓取知识库。"
+    default_skills:
+      - "web_search"
+      - "doc_writer"
+      - "copywriter"
+    default_mcp:
+      - "browser"
+      - "filesystem"
+      - "fetch"
+      - "sqlite"
+    tags: ["客服", "问答", "自动回复"]

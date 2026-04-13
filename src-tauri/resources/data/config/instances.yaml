@@ -1,0 +1,10 @@
+# 实例配置
+# 实例 = 机器人 + 聊天通道 + 模型
+# （首次安装后通过向导引导创建）
+
+instances: []
+stats:
+  total_instances: 0
+  running_instances: 0
+  total_messages: 0
+  last_updated: null

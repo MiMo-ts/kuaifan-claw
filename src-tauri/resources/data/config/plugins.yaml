@@ -1,0 +1,166 @@
+# 插件配置
+# 记录已安装的聊天平台插件
+
+installed_plugins: []
+
+# 可用插件列表
+available_plugins:
+  - id: "dingtalk"
+    name: "钉钉"
+    icon: "📱"
+    description: "钉钉企业内部应用"
+    repo: "openclaw-cn/plugin-dingtalk"
+    required_creds:
+      - name: "AppKey"
+        type: "string"
+        required: true
+      - name: "AppSecret"
+        type: "string"
+        required: true
+    webhook_required: true
+
+  - id: "feishu"
+    name: "飞书"
+    icon: "📱"
+    description: "飞书企业自建应用"
+    repo: "openclaw-cn/plugin-feishu"
+    required_creds:
+      - name: "AppID"
+        type: "string"
+        required: true
+      - name: "AppSecret"
+        type: "string"
+        required: true
+      - name: "VerificationToken"
+        type: "string"
+        required: true
+    webhook_required: true
+
+  - id: "wxwork"
+    name: "企业微信"
+    icon: "📱"
+    description: "企业微信自建应用"
+    repo: "openclaw-cn/plugin-wxwork"
+    required_creds:
+      - name: "CorpID"
+        type: "string"
+        required: true
+      - name: "CorpSecret"
+        type: "string"
+        required: true
+      - name: "AgentID"
+        type: "string"
+        required: true
+    webhook_required: true
+
+  - id: "wechat_clawbot"
+    name: "微信 ClawBot"
+    icon: "💬"
+    description: "微信 ClawBot 协议接入（非公众号）"
+    repo: "openclaw-cn/plugin-wechat-clawbot"
+    install_type: "cli"
+    cli_commands:
+      primary: "npx -y @tencent-weixin/openclaw-weixin-cli@latest install"
+      alternative: "npm exec --yes -- @tencent-weixin/openclaw-weixin-cli@latest install"
+    prerequisites:
+      - "Node.js 18+"
+      - "npm 9+ 或 pnpm 8+"
+    platform_notes:
+      windows: "使用 PowerShell 或 CMD 执行命令"
+      linux: "使用系统终端执行"
+      macos: "使用 Terminal 或 iTerm 执行"
+    scan_steps:
+      - "执行 CLI 命令后自动弹出二维码"
+      - "使用微信扫码确认授权"
+      - "获取设备授权码并填入下方表单"
+    required_creds:
+      - name: "AuthCode"
+        type: "string"
+        required: true
+        label: "设备授权码"
+    webhook_required: false
+    special_note: "通过微信 ClawBot CLI 安装协议直接接入，需微信扫码授权"
+
+  - id: "telegram"
+    name: "Telegram"
+    icon: "📱"
+    description: "Telegram Bot API"
+    repo: "openclaw-cn/plugin-telegram"
+    required_creds:
+      - name: "BotToken"
+        type: "string"
+        required: true
+    webhook_required: true
+
+  - id: "qq"
+    name: "QQ"
+    icon: "📱"
+    description: "QQ 机器人协议"
+    repo: "openclaw-cn/plugin-qq"
+    required_creds:
+      - name: "AppID"
+        type: "string"
+        required: true
+      - name: "AppSecret"
+        type: "string"
+        required: true
+    webhook_required: true
+
+  - id: "whatsapp"
+    name: "WhatsApp"
+    icon: "📱"
+    description: "WhatsApp Business API"
+    repo: "openclaw-cn/plugin-whatsapp"
+    required_creds:
+      - name: "PhoneNumberID"
+        type: "string"
+        required: true
+      - name: "AccessToken"
+        type: "string"
+        required: true
+    webhook_required: true
+
+  - id: "discord"
+    name: "Discord"
+    icon: "📱"
+    description: "Discord Bot API"
+    repo: "openclaw-cn/plugin-discord"
+    required_creds:
+      - name: "BotToken"
+        type: "string"
+        required: true
+    webhook_required: true
+
+  - id: "slack"
+    name: "Slack"
+    icon: "📱"
+    description: "Slack Bot"
+    repo: "openclaw-cn/plugin-slack"
+    required_creds:
+      - name: "BotToken"
+        type: "string"
+        required: true
+    webhook_required: true
+
+  - id: "email"
+    name: "邮件"
+    icon: "📧"
+    description: "邮件 IMAP/SMTP"
+    repo: "openclaw-cn/plugin-email"
+    required_creds:
+      - name: "SMTPHost"
+        type: "string"
+        required: true
+      - name: "SMTPPort"
+        type: "number"
+        required: true
+      - name: "SMTPUser"
+        type: "string"
+        required: true
+      - name: "SMTPPassword"
+        type: "string"
+        required: true
+      - name: "IMAPHost"
+        type: "string"
+        required: false
+    webhook_required: false

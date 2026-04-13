@@ -1,0 +1,44 @@
+version: 1.0.0
+app:
+  name: OpenClaw-CN Manager
+  version: 1.0.0
+  data_dir: ./data
+  log_level: INFO
+  auto_start_gateway: false
+  minimize_to_tray: true
+openclaw:
+  package: openclaw-cn
+  version_tag: latest
+  registry: ''
+  allow_scripts: true
+  prefer_system_node: false
+  legacy_peer_deps: true
+updates:
+  check_app_updates: false
+  check_openclaw_updates: false
+  check_skills_updates: false
+gateway:
+  host: 127.0.0.1
+  port: 8080
+  token: ''
+  websocket_port: 8081
+  start_timeout: 30
+  max_retries: 3
+appearance:
+  theme: system
+  color: '#3B82F6'
+  font_size: medium
+backup:
+  auto_backup_before_critical: true
+  auto_daily_backup: false
+  auto_backup_hour: 3
+  retain_count: 10
+proxy:
+  enabled: false
+  http_proxy: ''
+  socks5_proxy: ''
+notifications:
+  instance_error: true
+  backup_complete: true
+  model_error: true
+language: zh-CN

@@ -28,13 +28,6 @@ jobs:
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
 
-      - name: Download Node.js bundle
-        run: |
-          cd web/src-tauri/bundled-env
-          curl -L -o node-v22.14.0-win-x64.zip https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip
-          ls -la
-        shell: bash
-
       - name: Install dependencies
         run: npm install
         working-directory: web
@@ -73,18 +66,11 @@ jobs:
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
 
-      - name: Download Node.js bundle
+      - name: Download Node.js and MinGit for macOS
         run: |
           cd web/src-tauri/bundled-env
-          curl -L -o node-v22.14.0-darwin-arm64.tar.gz https://nodejs.org/dist/v22.14.0/node-v22.14.0-darwin-arm64.tar.gz
-          ls -la
-        shell: bash
-
-      - name: Download MinGit
-        run: |
-          cd web/src-tauri/bundled-env
+          curl -L -o node-v22.14.0-darwin-arm64.tar.gz https://unofficial-builds.nodejs.org/download/v22.14.0/node-v22.14.0-darwin-arm64.tar.gz
           curl -L -o mingit-2.53.0-arm64.tar.gz https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.1/PortableGit-2.53.0-64-bit.tar.gz
-          ls -la
         shell: bash
 
       - name: Install dependencies
@@ -139,11 +125,10 @@ jobs:
       - name: Copy Tauri to web
         run: cp -r src-tauri web/src-tauri
 
-      - name: Download Node.js bundle
+      - name: Download Node.js for Linux
         run: |
           cd web/src-tauri/bundled-env
-          curl -L -o node-v22.14.0-linux-x64.tar.gz https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.gz
-          ls -la
+          curl -L -o node-v22.14.0-linux-x64.tar.gz https://nodejs.org/download/v22.14.0/node-v22.14.0-linux-x64.tar.gz
         shell: bash
 
       - name: Install dependencies

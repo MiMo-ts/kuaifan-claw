@@ -1,0 +1,409 @@
+# 大模型配置
+
+# 全局默认模型（用户首次安装后通过向导配置）
+default_model:
+  provider: ""
+  model_name: ""
+  # api_key 建议通过环境变量或加密存储，不直接写在配置文件
+
+# 已配置的供应商
+providers:
+  # OpenRouter（推荐免费模型聚合平台）
+  openrouter:
+    enabled: false
+    api_key: ""
+    base_url: "https://openrouter.ai/api/v1"
+    models:
+      - id: "google/gemini-2.0-flash-thinking-exp:free"
+        name: "Gemini 2.0 Flash Thinking"
+        free: true
+        recommended: true
+      - id: "google/gemini-2.0-flash-exp"
+        name: "Gemini 2.0 Flash"
+        free: true
+        recommended: true
+      - id: "deepseek/deepseek-chat-v3-0324:free"
+        name: "DeepSeek V3 Chat（免费）"
+        free: true
+        recommended: true
+      - id: "deepseek/deepseek-coder-v2-0324:free"
+        name: "DeepSeek Coder V2（免费）"
+        free: true
+        recommended: false
+      - id: "anthropic/claude-3.5-haiku:free"
+        name: "Claude 3.5 Haiku"
+        free: true
+        recommended: true
+      - id: "anthropic/claude-3.5-sonnet:free"
+        name: "Claude 3.5 Sonnet"
+        free: true
+        recommended: false
+      - id: "meta-llama/llama-3.2-1b-instruct:free"
+        name: "Llama 3.2 1B"
+        free: true
+        recommended: false
+      - id: "meta-llama/llama-3.2-3b-instruct:free"
+        name: "Llama 3.2 3B"
+        free: true
+        recommended: false
+      - id: "meta-llama/llama-3.3-70b-instruct:free"
+        name: "Llama 3.3 70B"
+        free: true
+        recommended: false
+      - id: "google/gemma-2-2b-it:free"
+        name: "Gemma 2 2B"
+        free: true
+        recommended: false
+      - id: "google/gemma-2-9b-it:free"
+        name: "Gemma 2 9B"
+        free: true
+        recommended: false
+      - id: "qwen/qwen-2.5-7b-instruct:free"
+        name: "Qwen 2.5 7B"
+        free: true
+        recommended: false
+      - id: "qwen/qwen-2.5-72b-instruct:free"
+        name: "Qwen 2.5 72B"
+        free: true
+        recommended: false
+      - id: "qwen/qwen-2.5-coder-32b:free"
+        name: "Qwen Coder 32B"
+        free: true
+        recommended: false
+      - id: "mistralai/mistral-nemo:free"
+        name: "Mistral Nemo"
+        free: true
+        recommended: false
+      - id: "mistralai/mistral-small-3.1:free"
+        name: "Mistral Small 3.1"
+        free: true
+        recommended: false
+      - id: "microsoft/phi-4:free"
+        name: "Phi-4"
+        free: true
+        recommended: false
+      - id: "microsoft/phi-3.5-mini-instruct:free"
+        name: "Phi-3.5 Mini"
+        free: true
+        recommended: false
+      - id: "nvidia/llama-3.1-nemotron-70b-instruct:free"
+        name: "Nemotron 70B"
+        free: true
+        recommended: false
+      - id: "openchat/openchat-7b:free"
+        name: "OpenChat 7B"
+        free: true
+        recommended: false
+      - id: "cognitivecomputations/dolphin-mixtral-8x7b:free"
+        name: "Dolphin Mixtral"
+        free: true
+        recommended: false
+      - id: "google/gemini-3-pro-exp:free"
+        name: "Gemini 3 Pro"
+        free: true
+        recommended: false
+
+  # OpenAI
+  openai:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.openai.com/v1"
+    models:
+      - id: "gpt-4o"
+        name: "GPT-4o"
+        free: false
+      - id: "gpt-4o-mini"
+        name: "GPT-4o Mini"
+        free: false
+      - id: "gpt-4-turbo"
+        name: "GPT-4 Turbo"
+        free: false
+      - id: "gpt-3.5-turbo"
+        name: "GPT-3.5 Turbo"
+        free: false
+
+  # Anthropic
+  anthropic:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.anthropic.com"
+    models:
+      - id: "claude-3-7-sonnet-20250514"
+        name: "Claude 3.7 Sonnet"
+        free: false
+      - id: "claude-3-5-sonnet-20241022"
+        name: "Claude 3.5 Sonnet"
+        free: false
+      - id: "claude-3-5-haiku-20241022"
+        name: "Claude 3.5 Haiku"
+        free: false
+      - id: "claude-3-opus-20240229"
+        name: "Claude 3 Opus"
+        free: false
+
+  # Google Gemini
+  google:
+    enabled: false
+    api_key: ""
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    models:
+      - id: "gemini-2.5-pro-preview-03-25"
+        name: "Gemini 2.5 Pro"
+        free: false
+      - id: "gemini-2.0-flash"
+        name: "Gemini 2.0 Flash"
+        free: false
+      - id: "gemini-1.5-pro"
+        name: "Gemini 1.5 Pro"
+        free: false
+      - id: "gemini-1.5-flash"
+        name: "Gemini 1.5 Flash"
+        free: false
+
+  # DeepSeek
+  deepseek:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.deepseek.com"
+    models:
+      - id: "deepseek-chat"
+        name: "DeepSeek Chat"
+        free: false
+      - id: "deepseek-coder"
+        name: "DeepSeek Coder"
+        free: false
+      - id: "deepseek-reasoner"
+        name: "DeepSeek Reasoner"
+        free: false
+
+  # 小米 MiMo
+  xiaomi:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.xiaomi.com/v1"
+    website: "https://platform.xiaomimimo.com"
+    models:
+      - id: "MiLM-7B-Search"
+        name: "MiLM 7B 搜索版"
+        free: false
+        recommended: true
+      - id: "MiLM-12B"
+        name: "MiLM 12B"
+        free: false
+        recommended: false
+      - id: "MiLM-7B-Chat"
+        name: "MiLM 7B 对话版"
+        free: false
+        recommended: false
+
+  # 百度文心一言
+  baidu:
+    enabled: false
+    api_key: ""
+    secret_key: ""
+    base_url: "https://aip.baidubce.com/rpc/2.0/ai_custom/v1"
+    models:
+      - id: "ernie-4.0-8k-latest"
+        name: "ERNIE 4.0 8K"
+        free: false
+      - id: "ernie-3.5-8k-preview"
+        name: "ERNIE 3.5 8K"
+        free: false
+      - id: "ernie-lite-8k"
+        name: "ERNIE Lite 8K"
+        free: true
+
+  # 阿里通义千问
+  aliyun:
+    enabled: false
+    api_key: ""
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    models:
+      - id: "qwen-max"
+        name: "Qwen Max"
+        free: false
+      - id: "qwen-plus"
+        name: "Qwen Plus"
+        free: false
+      - id: "qwen-turbo"
+        name: "Qwen Turbo"
+        free: false
+      - id: "qwen-long"
+        name: "Qwen Long"
+        free: false
+
+  # 腾讯混元
+  tencent:
+    enabled: false
+    api_key: ""
+    secret_key: ""
+    base_url: "https://hunyuan.cloud.tencent.com"
+    models:
+      - id: "hunyuan-pro"
+        name: "混元 Pro"
+        free: false
+      - id: "hunyuan-standard"
+        name: "混元 Standard"
+        free: false
+      - id: "hunyuan-lite"
+        name: "混元 Lite"
+        free: true
+
+  # 字节豆包
+  volcengine:
+    enabled: false
+    api_key: ""
+    base_url: "https://ark.cn-beijing.volces.com/api/v3"
+    models:
+      - id: "doubao-pro-32k"
+        name: "豆包 Pro 32K"
+        free: false
+      - id: "doubao-standard-32k"
+        name: "豆包 Standard 32K"
+        free: false
+      - id: "doubao-lite-32k"
+        name: "豆包 Lite 32K"
+        free: true
+
+  # 讯飞星火
+  xfyun:
+    enabled: false
+    api_key: ""
+    api_secret: ""
+    app_id: ""
+    base_url: "https://spark-api.xf-yun.com"
+    models:
+      - id: "v4.0"
+        name: "星火大模型 V4.0"
+        free: false
+      - id: "v3.5"
+        name: "星火大模型 V3.5"
+        free: false
+      - id: "v3.0"
+        name: "星火大模型 V3.0"
+        free: false
+      - id: "lite"
+        name: "星火大模型 Lite"
+        free: true
+
+  # 智谱 GLM
+  zhipu:
+    enabled: false
+    api_key: ""
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    models:
+      - id: "glm-4-plus"
+        name: "GLM-4 Plus"
+        free: false
+      - id: "glm-4"
+        name: "GLM-4"
+        free: false
+      - id: "glm-4-flash"
+        name: "GLM-4 Flash"
+        free: true
+      - id: "glm-4v"
+        name: "GLM-4V"
+        free: false
+
+  # Kimi（月之暗面）
+  moonshot:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.moonshot.cn/v1"
+    models:
+      - id: "moonshot-v1-128k"
+        name: "Moonshot V1 128K"
+        free: false
+      - id: "moonshot-v1-32k"
+        name: "Moonshot V1 32K"
+        free: false
+      - id: "moonshot-v1-8k"
+        name: "Moonshot V1 8K"
+        free: false
+      - id: "kimi-1.5-8k"
+        name: "Kimi 1.5 8K"
+        free: true
+
+  # Ollama 本地模型
+  ollama:
+    enabled: false
+    base_url: "http://localhost:11434"
+    models: []
+
+  # Groq
+  groq:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.groq.com/openai/v1"
+    models:
+      - id: "llama-3.3-70b-versatile"
+        name: "Llama 3.3 70B Versatile"
+        free: false
+      - id: "mixtral-8x7b-32768"
+        name: "Mixtral 8x7B"
+        free: false
+      - id: "gemma2-9b-it"
+        name: "Gemma 2 9B"
+        free: false
+
+  # Cohere
+  cohere:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.cohere.ai/v1"
+    models:
+      - id: "command-r-plus"
+        name: "Command R+"
+        free: false
+      - id: "command-r"
+        name: "Command R"
+        free: false
+      - id: "command"
+        name: "Command"
+        free: false
+
+  # MiniMax
+  minimax:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.minimax.chat/v1"
+    models:
+      - id: "MiniMax-M2.5"
+        name: "MiniMax M2.5"
+        free: false
+      - id: "MiniMax-M2.5-highspeed"
+        name: "MiniMax M2.5 高速"
+        free: false
+      - id: "abab6.5s-chat"
+        name: "ABAB 6.5S"
+        free: false
+      - id: "abab5.5s-chat"
+        name: "ABAB 5.5S"
+        free: false
+
+  # 百川智能
+  baichuan:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.baichuan-ai.com/v1"
+    models:
+      - id: "Baichuan4"
+        name: "百川 4"
+        free: false
+      - id: "Baichuan3-Turbo"
+        name: "百川 3 Turbo"
+        free: false
+      - id: "Baichuan3"
+        name: "百川 3"
+        free: true
+
+  # 其他自定义 OpenAI 兼容 API
+  custom:
+    enabled: false
+    name: "自定义 API"
+    api_key: ""
+    base_url: ""
+    models:
+      - id: "custom-model"
+        name: "自定义模型"
+        free: false
