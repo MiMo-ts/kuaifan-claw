@@ -571,7 +571,6 @@ fn find_pnpm_cmd() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let mut cmd = Command::new("where.exe");
-        cmd.creation_flags(0x08000000);
         if let Ok(out) = cmd.arg("pnpm.cmd").output() {
             if out.status.success() {
                 let line = String::from_utf8_lossy(&out.stdout)
@@ -932,7 +931,6 @@ fn install_plugin_deps_blocking(
             c.output()
         } else if cfg!(windows) {
             let mut c = Command::new("cmd");
-            c.creation_flags(0x08000000);
             c.args(["/C"])
                 .arg(&npm_cmd)
                 .current_dir(plugin_dir)
@@ -964,7 +962,6 @@ fn install_plugin_deps_blocking(
                     c.output()
                 } else if cfg!(windows) {
                     let mut c = Command::new("cmd");
-                    c.creation_flags(0x08000000);
                     c.args(["/C"])
                         .arg(&npm_cmd)
                         .current_dir(plugin_dir)
@@ -1118,7 +1115,6 @@ fn install_plugin_deps_blocking(
             c.output()
         } else if cfg!(windows) {
             let mut c = Command::new("cmd");
-            c.creation_flags(0x08000000);
             c.args(["/C"])
                 .arg(&npm_cmd)
                 .current_dir(plugin_dir)
@@ -1323,7 +1319,6 @@ fn npm_pack_unpack_blocking(
                 .output()
         } else if cfg!(windows) {
             Command::new("cmd")
-                .creation_flags(0x08000000)
                 .args(["/C"])
                 .arg(&npm_cmd)
                 .args(pack_args)
@@ -1434,7 +1429,6 @@ fn find_tsc_exe(data_base: &str) -> (PathBuf, String) {
             // npm config get prefix 找全局包根目录（即使 GUI 进程 PATH 为空也能用绝对路径执行 npm）
             let prefix_out = if cfg!(windows) {
                 Command::new("cmd")
-                    .creation_flags(0x08000000)
                     .args(["/C"])
                     .arg(&npm)
                     .args(["config", "get", "prefix"])
@@ -1518,7 +1512,6 @@ fn build_ts_extensions_blocking(data_base: &str, plugin_dir: &str) -> Result<(),
 
     let o = if cfg!(windows) {
         Command::new("cmd")
-            .creation_flags(0x08000000)
             .args(["/C"])
             .arg(&tsc_exe)
             .current_dir(plugin_dir)
@@ -1781,7 +1774,6 @@ fn feishu_node_sdk_fallback_install(
             c.output()
         } else if cfg!(windows) {
             let mut c = Command::new("cmd");
-            c.creation_flags(0x08000000);
             c.args(["/C"]).arg(&npm_cmd).current_dir(plugin_dir).args(args);
             fill_env(&mut c);
             c.output()

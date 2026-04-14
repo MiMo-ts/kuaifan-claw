@@ -222,7 +222,6 @@ pub async fn check_pnpm_installation() -> Result<EnvItem, String> {
     info!("检查 pnpm...");
 
     let output = Command::new("pnpm")
-        .creation_flags(0x08000000)
         .arg("--version")
         .output()
         .ok()
@@ -231,7 +230,6 @@ pub async fn check_pnpm_installation() -> Result<EnvItem, String> {
             #[cfg(windows)]
             {
                 Command::new("cmd")
-                    .creation_flags(0x08000000)
                     .args(["/C", "pnpm", "--version"])
                     .output()
                     .ok()
@@ -462,7 +460,6 @@ fn disk_free_gb_for_path(data_dir: &str) -> Option<f64> {
 
         let ps = format!("(Get-PSDrive -Name '{}').Free / 1GB", drive);
         let output = Command::new("powershell")
-            .creation_flags(0x08000000)
             .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
             .output()
             .ok()?;

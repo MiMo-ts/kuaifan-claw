@@ -291,7 +291,7 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
 
         download_with_mirrors(
             &reqwest::Client::new(),
-            &brew_script_urls,
+            &brew_script_urls.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             &script_path,
             "homebrew",
             &_app,
@@ -346,7 +346,6 @@ pub async fn install_pnpm(app: AppHandle) -> Result<String, String> {
 
     #[cfg(windows)]
     let output = Command::new("cmd")
-        .creation_flags(0x08000000)
         .args(["/C", "npm", "install", "-g", "pnpm"])
         .output()
         .map_err(|e| format!("执行失败: {}", e))?;
@@ -899,10 +898,6 @@ async fn run_npm_install_for_background(
             c.output()
         } else {
             let mut c = std::process::Command::new("cmd");
-            #[cfg(windows)]
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            #[cfg(windows)]
-            { c.creation_flags(CREATE_NO_WINDOW); }
             c.args(["/C"])
                 .arg(&npm_cmd_owned)
                 .current_dir(&openclaw_dir_owned)
@@ -983,7 +978,6 @@ fn find_node_executable() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let mut cmd = Command::new("where.exe");
-        cmd.creation_flags(0x08000000);
         if let Ok(out) = cmd.arg("node.exe").output() {
             if out.status.success() {
                 let line = String::from_utf8_lossy(&out.stdout)
@@ -1024,7 +1018,6 @@ fn find_npm_cmd_full_path() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let mut cmd = Command::new("where.exe");
-        cmd.creation_flags(0x08000000);
         if let Ok(out) = cmd.arg("npm.cmd").output() {
             if out.status.success() {
                 let line = String::from_utf8_lossy(&out.stdout)
@@ -1066,7 +1059,6 @@ fn find_pnpm_executable() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let mut cmd = Command::new("where.exe");
-        cmd.creation_flags(0x08000000);
         if let Ok(out) = cmd.arg("pnpm.cmd").output() {
             if out.status.success() {
                 let line = String::from_utf8_lossy(&out.stdout)
@@ -1199,7 +1191,6 @@ fn fetch_openclaw_via_npm_pack_blocking(
         c
     } else if cfg!(windows) {
         let mut c = Command::new("cmd");
-        c.creation_flags(0x08000000);
         c.args(["/C"]).arg(&npm_cmd).args(pack_args);
         c
     } else {
@@ -1872,7 +1863,6 @@ pub async fn install_openclaw(
                 c.output()
             } else if cfg!(windows) {
                 let mut c = Command::new("cmd");
-                c.creation_flags(0x08000000);
                 c.args(["/C"])
                     .arg(&npm_cmd)
                     .current_dir(&openclaw_dir_for_task)

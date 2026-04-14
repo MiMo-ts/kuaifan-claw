@@ -123,7 +123,6 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
     #[cfg(windows)]
     {
         let output = Command::new("cmd")
-            .creation_flags(0x08000000)
             .args(["/C", "systeminfo"])
             .output();
 

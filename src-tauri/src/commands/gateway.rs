@@ -2366,7 +2366,6 @@ fn kill_windows_processes_listening_on_port(port: u16) {
         port
     );
     let out = Command::new("powershell")
-        .creation_flags(0x08000000)
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
         .output();
     if let Ok(o) = &out {
@@ -2384,7 +2383,6 @@ fn kill_windows_processes_listening_on_port(port: u16) {
 #[cfg(windows)]
 fn kill_windows_processes_listening_on_port_netstat_fallback(port: u16) {
     let out = Command::new("cmd")
-        .creation_flags(0x08000000)
         .args(["/C", &format!("netstat -ano | findstr :{}", port)])
         .output();
     let Ok(o) = out else {
@@ -2410,7 +2408,6 @@ fn kill_windows_processes_listening_on_port_netstat_fallback(port: u16) {
     }
     for pid in pids {
         let _ = Command::new("cmd")
-            .creation_flags(0x08000000)
             .args(["/C", &format!("taskkill /PID {} /F /T", pid)])
             .output();
     }
@@ -2531,7 +2528,6 @@ fn stop_gateway_processes_best_effort(data_dir: &str) {
                 #[cfg(windows)]
                 {
                     let out = Command::new("cmd")
-                        .creation_flags(0x08000000)
                         .args(["/C", &format!("taskkill /PID {} /F /T", pid)])
                         .output();
                     match out {
@@ -2925,9 +2921,6 @@ fn spawn_gateway_process(
                 cmd.env(var, key);
             }
         }
-
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000);
 
         attach_gateway_stdio_to_log(&mut cmd, data_dir)?;
 
