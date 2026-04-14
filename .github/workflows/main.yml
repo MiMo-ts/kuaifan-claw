@@ -50,10 +50,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '18'
-      - run: npm install && npm run build
+      - name: Install and build frontend
+        run: |
+          npm install
+          npm run build
+          if (!(Test-Path web/dist/index.html)) { throw "Frontend build failed - index.html not found" }
         working-directory: web
-      - run: mkdir -p src-tauri/dist && cp -r web/dist/* src-tauri/dist/
-      - run: npx @tauri-apps/cli build
+      - name: Copy dist to src-tauri (with clean)
+        run: |
+          mkdir -p src-tauri/dist
+          Remove-Item -Recurse -Force src-tauri/dist/* -ErrorAction SilentlyContinue
+          Copy-Item -Recurse web/dist/* src-tauri/dist/
+          if (!(Test-Path src-tauri/dist/index.html)) { throw "Copy failed - index.html not found in src-tauri/dist" }
+          Write-Host "=== src-tauri/dist contents ==="
+          Get-ChildItem src-tauri/dist -Recurse | Format-Table Name, Length
+        shell: pwsh
+      - name: Build Tauri
+        run: npx @tauri-apps/cli build
         working-directory: src-tauri
       - uses: actions/upload-artifact@v4
         with:
