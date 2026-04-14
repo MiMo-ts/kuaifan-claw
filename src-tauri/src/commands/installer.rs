@@ -289,9 +289,11 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
         let temp_dir = std::env::temp_dir();
         let script_path = temp_dir.join("brew_install.sh");
 
+        // Convert Vec<String> to Vec<&str> for download_with_mirrors
+        let brew_urls: Vec<&str> = brew_script_urls.iter().map(|s| s.as_str()).collect();
         download_with_mirrors(
             &reqwest::Client::new(),
-            &brew_script_urls.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            brew_urls,
             &script_path,
             "homebrew",
             &_app,
