@@ -7,7 +7,7 @@ use crate::env_paths::{
     build_deps_env_path, env_root, git_exe, git_exists, node_exe, resolve_node, unzip,
 };
 #[cfg(target_os = "macos")]
-use crate::mirror::github_mirror_urls;
+use crate::mirror::brew_install_script_urls;
 use crate::mirror::{download_with_mirrors, unpack_npm_tarball, InstallProgressEvent};
 use crate::models::{InstallProgress, OpenClawCnStatus};
 use std::io::Cursor;
@@ -277,10 +277,8 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
     {
         info!("开始安装 Homebrew...");
 
-        // 依次尝试 ghproxy 镜像和主源
-        let brew_script_urls = github_mirror_urls(
-            "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh",
-        );
+        // 使用 Homebrew 专用镜像（清华/中科大优先）
+        let brew_script_urls = brew_install_script_urls();
 
         emit(
             &_app,
