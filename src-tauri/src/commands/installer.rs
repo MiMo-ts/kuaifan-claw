@@ -307,13 +307,23 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
             InstallProgressEvent::progress(
                 "homebrew",
                 60.0,
-                "正在执行 Homebrew 安装脚本，请输入密码...",
+                "正在执行 Homebrew 安装脚本（使用国内镜像）...",
             ),
         );
 
-        let status = Command::new("/bin/bash")
-            .env("NONINTERACTIVE", "1")
-            .arg(&script_path)
+        // 设置 Homebrew 国内镜像环境变量（清华源）
+        // 这些变量让 Homebrew 从国内镜像拉取，而不是直接从 GitHub
+        let mut cmd = Command::new("/bin/bash");
+        cmd.env("NONINTERACTIVE", "1")
+            .env("HOMEBREW_API_DOMAIN", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/api")
+            .env("HOMEBREW_BOTTLE_DOMAIN", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/bottles")
+            .env("HOMEBREW_BREW_GIT_REMOTE", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/brew.git")
+            .env("HOMEBREW_CORE_GIT_REMOTE", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/core.git")
+            .env("HOMEBREW_PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
+            .env("HOMEBREW_PIP_INDEX_BINARY_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
+            .arg(&script_path);
+
+        let status = cmd
             .spawn()
             .and_then(|mut child| child.wait())
             .map_err(|e| format!("启动 Homebrew 安装脚本失败: {}", e))?;
@@ -325,7 +335,7 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
                 &_app,
                 InstallProgressEvent::finished("homebrew", "Homebrew 安装成功"),
             );
-            Ok("Homebrew 安装成功，请重启终端后运行 `brew doctor` 验证".to_string())
+            Ok("Homebrew 安装成功（已配置清华镜像），请重启终端后运行 `brew doctor` 验证".to_string())
         } else {
             emit(
                 &_app,
