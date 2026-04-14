@@ -8,6 +8,8 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+#[cfg(target_os = "macos")]
+use crate::mirror::InstallProgressEvent;
 use tracing::{info, warn};
 
 // 检查 Node.js 版本（优先检测自包含 node.exe，兜底 PATH）

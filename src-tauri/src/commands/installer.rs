@@ -17,6 +17,8 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+#[cfg(target_os = "macos")]
+use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
 // ─── 工具 ─────────────────────────────────────────────────────────────────
