@@ -1,6 +1,7 @@
 // 系统命令
 
 use crate::models::SystemInfo;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 

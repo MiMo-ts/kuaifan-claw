@@ -7,7 +7,7 @@ use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::time::Duration;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
 
 // 检查 Node.js 版本（优先检测自包含 node.exe，兜底 PATH）
@@ -477,7 +477,8 @@ fn disk_free_gb_for_path(data_dir: &str) -> Option<f64> {
         if !output.status.success() {
             return None;
         }
-        let line = String::from_utf8_lossy(&output.stdout).lines().nth(1)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.lines().nth(1)?;
         let avail_kb: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
         Some(avail_kb as f64 / (1024.0 * 1024.0))
     }

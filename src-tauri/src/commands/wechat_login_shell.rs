@@ -116,7 +116,7 @@ pub fn spawn_macos(
     let cmd_path = temp_script_path(".command");
 
     let openclaw_s = sh_escape(openclaw_dir.to_string_lossy().as_ref());
-    let node_s = if node == PathBuf::from("node") {
+    let node_s = if *node == PathBuf::from("node") {
         "node".to_string()
     } else {
         sh_escape(node.to_string_lossy().as_ref())
@@ -201,7 +201,7 @@ pub fn spawn_linux(
     entry: &PathBuf,
 ) -> Result<String, String> {
     let openclaw_s = sh_escape(openclaw_dir.to_string_lossy().as_ref());
-    let node_s = if node == PathBuf::from("node") {
+    let node_s = if *node == PathBuf::from("node") {
         "node".to_string()
     } else {
         sh_escape(node.to_string_lossy().as_ref())

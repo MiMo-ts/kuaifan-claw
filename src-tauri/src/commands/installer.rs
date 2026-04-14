@@ -8,7 +8,7 @@ use crate::env_paths::{
 };
 #[cfg(target_os = "macos")]
 use crate::mirror::github_mirror_urls;
-use crate::mirror::{unpack_npm_tarball, InstallProgressEvent};
+use crate::mirror::{download_with_mirrors, unpack_npm_tarball, InstallProgressEvent};
 use crate::models::{InstallProgress, OpenClawCnStatus};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
