@@ -28,13 +28,15 @@ jobs:
         run: npm run build
         working-directory: web
       - name: Show dist
-        run: ls -la web/dist
+        run: ls web/dist
       - name: Copy dist
         run: |
           mkdir -p src-tauri/dist
           rm -rf src-tauri/dist/*
           cp -r web/dist/* src-tauri/dist/
-          ls -la src-tauri/dist
+          ls src-tauri/dist
+      - name: Add Intel target
+        run: rustup target add x86_64-apple-darwin
       - name: Build Tauri for Intel
         run: npx @tauri-apps/cli build --target x86_64-apple-darwin
         working-directory: src-tauri
@@ -61,13 +63,15 @@ jobs:
         run: npm run build
         working-directory: web
       - name: Show dist
-        run: ls -la web/dist
+        run: ls web/dist
       - name: Copy dist
         run: |
           mkdir -p src-tauri/dist
           rm -rf src-tauri/dist/*
           cp -r web/dist/* src-tauri/dist/
-          ls -la src-tauri/dist
+          ls src-tauri/dist
+      - name: Add ARM target
+        run: rustup target add aarch64-apple-darwin
       - name: Build Tauri for Apple Silicon
         run: npx @tauri-apps/cli build --target aarch64-apple-darwin
         working-directory: src-tauri
@@ -87,7 +91,7 @@ jobs:
         run: npm install && npm run build
         working-directory: web
       - name: Show dist
-        run: ls -la web/dist
+        run: dir web/dist
       - name: Copy dist to src-tauri
         run: |
           mkdir -p src-tauri/dist
