@@ -2814,7 +2814,14 @@ impl<T: UserEvent> Wry<T> {
       next_webview_id: Default::default(),
       next_window_event_id: Default::default(),
       next_webview_event_id: Default::default(),
-      webview_runtime_installed: true, // FIX: skip webview_version() that crashes on some macOS
+      // FIX: On macOS, wry::webview_version() crashes due to Apple framework bug
+      // in NSBundle::bundleWithIdentifier on some macOS versions (11.7, 12.x in VMware).
+      // macOS always has WebKit installed, so we skip the check.
+      // Windows/Linux still need this check for WebView2/WebKitGTK.
+      #[cfg(target_os = "macos")]
+      webview_runtime_installed: true,
+      #[cfg(not(target_os = "macos"))]
+      webview_runtime_installed: wry::webview_version().is_ok(),
     };
 
     Ok(Self {
