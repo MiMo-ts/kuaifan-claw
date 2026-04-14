@@ -54,24 +54,6 @@ pub const MINGIT_ZIP: &str = "MinGit-2.53.0-64-bit.zip";
 /// MinGit 官方 releases 目录路径（URL path segment）
 pub const MINGIT_FILENAME: &str = "v2.53.0.windows.1/MinGit-2.53.0-64-bit.zip";
 
-/// Homebrew 安装脚本镜像（国内优先，官方兜底）
-/// 注意：Homebrew 安装脚本本身会再从 GitHub 克隆仓库，所以也需要镜像后续的 git clone
-const BREW_MIRRORS: &[&str] = &[
-    // 清华镜像（对 raw.githubusercontent.com 支持好）
-    "https://mirrors.tuna.tsinghua.edu.cn/homebrew/",
-    // 中科大镜像
-    "https://mirrors.ustc.edu.cn/brew/",
-    // 官方 raw + ghproxy 兜底
-    "https://ghproxy.net/https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh",
-    // 官方直连（最后兜底）
-    "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh",
-];
-
-/// 生成 Homebrew 安装脚本 URL 列表（镜像优先）
-pub fn brew_install_script_urls() -> Vec<String> {
-    BREW_MIRRORS.iter().map(|s| s.to_string()).collect()
-}
-
 /// 进度事件 Payload
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct InstallProgressEvent {
