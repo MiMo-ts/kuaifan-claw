@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-macos:
+  build-macos-intel:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,20 +28,53 @@ jobs:
         run: npm run build
         working-directory: web
       - name: Show dist
-        run: ls -la web/dist
+        run: ls -la dist
+        working-directory: web
       - name: Copy dist
-        run: mkdir -p src-tauri/dist && cp -r web/dist/* src-tauri/dist/
+        run: mkdir -p src-tauri/dist && cp -r dist/* src-tauri/dist/
+        working-directory: web
       - name: Show src-tauri
         run: ls -la src-tauri/dist
-      - name: Build Tauri verbose
-        run: cd src-tauri && cargo build --release -vv 2>&1 | tail -100
-      - name: Build Tauri
-        run: npx @tauri-apps/cli build
+      - name: Build Tauri for Intel
+        run: npx @tauri-apps/cli build --target x86_64-apple-darwin
         working-directory: src-tauri
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-package
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          name: macos-intel-package
+          path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+
+  build-macos-arm:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Show directory structure
+        run: ls -la
+      - name: Copy src-tauri
+        run: cp -r src-tauri src-tauri-temp && mv src-tauri-temp src-tauri
+      - name: Install deps
+        run: npm install
+        working-directory: web
+      - name: Build frontend
+        run: npm run build
+        working-directory: web
+      - name: Show dist
+        run: ls -la dist
+        working-directory: web
+      - name: Copy dist
+        run: mkdir -p src-tauri/dist && cp -r dist/* src-tauri/dist/
+        working-directory: web
+      - name: Show src-tauri
+        run: ls -la src-tauri/dist
+      - name: Build Tauri for Apple Silicon
+        run: npx @tauri-apps/cli build --target aarch64-apple-darwin
+        working-directory: src-tauri
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm-package
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
 
   build-windows:
     runs-on: windows-latest
@@ -54,13 +87,13 @@ jobs:
         run: |
           npm install
           npm run build
-          if (!(Test-Path web/dist/index.html)) { throw "Frontend build failed - index.html not found" }
+          if (!(Test-Path dist/index.html)) { throw "Frontend build failed - index.html not found" }
         working-directory: web
       - name: Copy dist to src-tauri (with clean)
         run: |
           mkdir -p src-tauri/dist
           Remove-Item -Recurse -Force src-tauri/dist/* -ErrorAction SilentlyContinue
-          Copy-Item -Recurse web/dist/* src-tauri/dist/
+          Copy-Item -Recurse dist/* src-tauri/dist/
           if (!(Test-Path src-tauri/dist/index.html)) { throw "Copy failed - index.html not found in src-tauri/dist" }
           Write-Host "=== src-tauri/dist contents ==="
           Get-ChildItem src-tauri/dist -Recurse | Format-Table Name, Length

@@ -7,10 +7,10 @@
       "artifactDir": "src-tauri\\target\\release"
     },
     "macos": {
-      "target": "aarch64-apple-darwin",
+      "targets": ["aarch64-apple-darwin", "x86_64-apple-darwin"],
       "outputDir": "mac",
-      "buildCommand": "npm run tauri:build -- --target aarch64-apple-darwin",
-      "artifactDir": "src-tauri\\target\\aarch64-apple-darwin\\release"
+      "buildCommand": "npm run tauri:build -- --target aarch64-apple-darwin --target x86_64-apple-darwin",
+      "artifactDir": "src-tauri\\target"
     }
   }
 }
