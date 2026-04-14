@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import WizardPage from './pages/WizardPage';
 import HomePage from './pages/HomePage';
@@ -12,7 +12,7 @@ import PluginPage from './pages/PluginPage';
 import SettingsPage from './pages/SettingsPage';
 import BackupPage from './pages/BackupPage';
 import TokenUsagePage from './pages/TokenUsagePage';
-import InviteCodePage from './pages/InviteCodePage';
+// import InviteCodePage from './pages/InviteCodePage'; // 邀请码验证已禁用
 import { useAppStore } from './stores/appStore';
 import InstallProgressBridge from './components/InstallProgressBridge';
 
@@ -54,9 +54,11 @@ function WizardOrSetup() {
 function App() {
   const { initialized, setInitialized } = useAppStore();
   const [inviteCodeValidated, setInviteCodeValidated] = useState(() => {
-    // 从本地存储中读取邀请码验证状态
-    const storedStatus = localStorage.getItem('inviteCodeValidated');
-    return storedStatus === 'true';
+    // TODO: 暂时禁用邀请码验证，始终返回 true
+    // 正式发布时需要恢复邀请码验证逻辑
+    return true;
+    // const storedStatus = localStorage.getItem('inviteCodeValidated');
+    // return storedStatus === 'true';
   });
   const [checkingInviteCode, setCheckingInviteCode] = useState(true);
 
@@ -120,10 +122,10 @@ function App() {
       <div className="min-h-screen bg-gray-50">
         <Toaster position="top-right" />
         <Routes>
-          {/* 邀请码验证页面 */}
-          <Route path="/invite-code" element={<InviteCodePage />} />
-          {/* 根路径重定向到邀请码验证页面或向导页面 */}
-          <Route path="/" element={inviteCodeValidated ? <WizardOrSetup /> : <Navigate to="/invite-code" replace />} />
+          {/* 邀请码验证页面 - 已禁用 */}
+          {/* <Route path="/invite-code" element={<InviteCodePage />} /> */}
+          {/* 根路径重定向到向导页面 */}
+          <Route path="/" element={<WizardOrSetup />} />
           <Route path="/wizard" element={<AlwaysWizard />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/robots" element={<RobotShopPage />} />
