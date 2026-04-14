@@ -2076,8 +2076,8 @@ fn static_provider_models(provider_id: &str) -> Vec<ModelEntry> {
         ],
         "grok" => vec![
             me(
-                "grok-2-1212",
-                "Grok 2（xAI 旗舰）",
+                "grok-3",
+                "Grok 3（xAI 最新旗舰）",
                 Some(131072),
                 false,
                 Some("旗舰"),
