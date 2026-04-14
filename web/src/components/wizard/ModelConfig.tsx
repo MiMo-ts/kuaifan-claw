@@ -45,6 +45,7 @@ const PROVIDER_DOCS: Record<string, { href: string; label: string }> = {
   aliyun: { href: 'https://dashscope.console.aliyun.com/', label: '阿里云 DashScope' },
   zhipu: { href: 'https://open.bigmodel.cn/', label: '智谱开放平台' },
   moonshot: { href: 'https://platform.moonshot.cn/', label: 'Kimi 开放平台' },
+  grok: { href: 'https://console.x.ai/', label: 'xAI Console' },
   baidu: { href: 'https://console.bce.baidu.com/qianfan/', label: '百度千帆' },
   xiaomi: { href: 'https://lmproxy.cn', label: 'MiMo 代理说明' },
 };
@@ -75,6 +76,11 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
   /** 当前全局默认模型（用于判断当前供应商+模型是否为默认） */
   const [currentDefault, setCurrentDefault] = useState<{ provider: string; model: string } | null>(null);
 
+  /** 代理设置 */
+  const [proxyUrl, setProxyUrl] = useState('');
+  const [proxyUsername, setProxyUsername] = useState('');
+  const [proxyPassword, setProxyPassword] = useState('');
+
   useEffect(() => {
     loadProviders();
   }, []);
@@ -97,12 +103,16 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
     try {
       // 并行加载：供应商配置（api_key）+ 全局默认模型
       const [cfg, defaultModel] = await Promise.all([
-        invoke<{ api_key?: string }>('get_provider_config', { providerId: selectedProvider }),
+        invoke<{ api_key?: string; proxy_url?: string; proxy_username?: string; proxy_password?: string }>('get_provider_config', { providerId: selectedProvider }),
         invoke<{ provider?: string; model_name?: string }>('get_default_model', {}),
       ]);
       const stored = cfg?.api_key || '';
       setApiKey(stored);
       setHasStoredKey(stored.length > 0);
+      // 加载代理设置
+      setProxyUrl(cfg?.proxy_url || '');
+      setProxyUsername(cfg?.proxy_username || '');
+      setProxyPassword(cfg?.proxy_password || '');
 
       // 同步全局默认模型状态
       const dm = defaultModel?.provider && defaultModel?.model_name
@@ -207,6 +217,9 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
         provider: selectedProvider,
         modelName: resolvedModelName,
         apiKey,
+        proxyUrl: proxyUrl || null,
+        proxyUsername: proxyUsername || null,
+        proxyPassword: proxyPassword || null,
       });
       setTestResult(result);
     } catch (e) {
@@ -221,6 +234,9 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
       await invoke('save_provider_config', {
         providerId: selectedProvider,
         apiKey,
+        proxyUrl: proxyUrl || null,
+        proxyUsername: proxyUsername || null,
+        proxyPassword: proxyPassword || null,
       });
       if (setDefault) {
         const name = resolvedModelName.trim();
@@ -561,6 +577,47 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
               </div>
             )}
           </div>
+
+          {/* 代理设置（仅 OpenAI、Google 和 Grok 支持） */}
+          {(selectedProvider === 'openai' || selectedProvider === 'google' || selectedProvider === 'grok') && (
+            <div className="space-y-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <label className="block text-sm font-medium text-gray-700">
+                代理服务设置（可选）
+              </label>
+              <div>
+                <input
+                  type="text"
+                  value={proxyUrl}
+                  onChange={(e) => setProxyUrl(e.target.value)}
+                  placeholder="代理地址，例如 http://127.0.0.1:7890"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <input
+                    type="text"
+                    value={proxyUsername}
+                    onChange={(e) => setProxyUsername(e.target.value)}
+                    placeholder="代理用户名"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="password"
+                    value={proxyPassword}
+                    onChange={(e) => setProxyPassword(e.target.value)}
+                    placeholder="代理密码"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-gray-500">
+                如使用代理服务，请填写代理地址及账号密码以提高连接稳定性
+              </p>
+            </div>
+          )}
 
           {/* 测试按钮 */}
           <div className="flex items-center gap-4">

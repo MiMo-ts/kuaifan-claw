@@ -187,6 +187,14 @@ pub async fn list_providers() -> Result<Vec<ModelProvider>, String> {
             total_models_count: 8,
         },
         ModelProvider {
+            id: "grok".to_string(),
+            name: "Grok (xAI)".to_string(),
+            enabled: false,
+            api_key_configured: false,
+            free_models_count: 0,
+            total_models_count: 5,
+        },
+        ModelProvider {
             id: "ollama".to_string(),
             name: "Ollama 本地模型".to_string(),
             enabled: false,
@@ -249,9 +257,12 @@ pub async fn get_provider_config(
         }));
     }
 
-    // 从 block_lines 中提取 api_key 和 enabled，并将加密的凭据解密后返回给前端
+    // 从 block_lines 中提取 api_key、enabled 和代理设置，并将加密的凭据解密后返回给前端
     let mut api_key = String::new();
     let mut enabled = false;
+    let mut proxy_url = String::new();
+    let mut proxy_username = String::new();
+    let mut proxy_password = String::new();
 
     for line in &block_lines {
         let trimmed = line.trim();
@@ -267,6 +278,30 @@ pub async fn get_provider_config(
             if let Some(val) = trimmed.split(':').nth(1) {
                 enabled = val.trim() == "true";
             }
+        } else if trimmed.starts_with("proxy_url:") {
+            proxy_url = trimmed
+                .split(':')
+                .nth(1)
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"')
+                .to_string();
+        } else if trimmed.starts_with("proxy_username:") {
+            proxy_username = trimmed
+                .split(':')
+                .nth(1)
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"')
+                .to_string();
+        } else if trimmed.starts_with("proxy_password:") {
+            proxy_password = trimmed
+                .split(':')
+                .nth(1)
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"')
+                .to_string();
         }
     }
 
@@ -290,6 +325,9 @@ pub async fn get_provider_config(
         "id": provider_id,
         "enabled": enabled,
         "api_key": api_key,
+        "proxy_url": proxy_url,
+        "proxy_username": proxy_username,
+        "proxy_password": proxy_password,
         "models": []
     }))
 }
@@ -396,6 +434,134 @@ fn upsert_provider_api_key(content: &str, provider_id: &str, api_key: &str) -> S
     }
 }
 
+/// 在 provider block 中更新或插入 proxy_url / proxy_username / proxy_password 字段
+fn upsert_provider_proxy_config(
+    content: &str,
+    provider_id: &str,
+    proxy_url: &str,
+    proxy_username: &str,
+    proxy_password: &str,
+) -> String {
+    let target_header = format!("{}:", provider_id);
+
+    let lines: Vec<&str> = content.lines().collect::<Vec<_>>();
+    let mut block_start: Option<usize> = None;
+    let mut block_end: Option<usize> = None;
+
+    // 第一遍：直接查找 provider_id
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('-')
+            && !trimmed.starts_with("  -")
+            && trimmed.starts_with(&target_header)
+            && !trimmed.starts_with("default_model:")
+        {
+            block_start = Some(i);
+        } else if let Some(start) = block_start {
+            if i > start
+                && (!line.starts_with("  ") && !line.starts_with('\t'))
+                && !trimmed.is_empty()
+            {
+                block_end = Some(i);
+                break;
+            }
+        }
+    }
+
+    // 第二遍：别名回退
+    if block_start.is_none() {
+        if let Some(alias) = yaml_id_alias(provider_id) {
+            let alias_header = format!("{}:", alias);
+            for (i, line) in lines.iter().enumerate() {
+                let trimmed = line.trim();
+                if !trimmed.starts_with('-')
+                    && !trimmed.starts_with("  -")
+                    && trimmed.starts_with(&alias_header)
+                    && !trimmed.starts_with("default_model:")
+                {
+                    block_start = Some(i);
+                } else if let Some(start) = block_start {
+                    if i > start
+                        && (!line.starts_with("  ") && !line.starts_with('\t'))
+                        && !trimmed.is_empty()
+                    {
+                        block_end = Some(i);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let proxy_url_line = format!("    proxy_url: \"{}\"", proxy_url);
+    let proxy_username_line = format!("    proxy_username: \"{}\"", proxy_username);
+    let proxy_password_line = format!("    proxy_password: \"{}\"", proxy_password);
+
+    match (block_start, block_end) {
+        (Some(start), end_opt) => {
+            let end = end_opt.unwrap_or(lines.len());
+            let mut new_lines: Vec<String> = lines[..start].iter().map(|s| s.to_string()).collect();
+            let in_block: Vec<&str> = lines[start..end].to_vec();
+            let mut has_proxy_url = false;
+            let mut has_proxy_username = false;
+            let mut has_proxy_password = false;
+
+            for line in &in_block {
+                let trimmed = line.trim();
+                if trimmed.starts_with("proxy_url:") {
+                    has_proxy_url = true;
+                } else if trimmed.starts_with("proxy_username:") {
+                    has_proxy_username = true;
+                } else if trimmed.starts_with("proxy_password:") {
+                    has_proxy_password = true;
+                }
+            }
+
+            let mut out_block: Vec<String> = Vec::new();
+            for line in &in_block {
+                let trimmed = line.trim();
+                if trimmed.starts_with("proxy_url:") {
+                    out_block.push(proxy_url_line.clone());
+                } else if trimmed.starts_with("proxy_username:") {
+                    out_block.push(proxy_username_line.clone());
+                } else if trimmed.starts_with("proxy_password:") {
+                    out_block.push(proxy_password_line.clone());
+                } else {
+                    out_block.push(line.to_string());
+                }
+            }
+
+            // 如果没有找到对应的行，则追加
+            if !has_proxy_url {
+                let insert_pos = out_block.len().saturating_sub(
+                    out_block.iter().rev().take_while(|s| s.trim().is_empty()).count(),
+                );
+                out_block.insert(insert_pos.max(1), proxy_url_line);
+            }
+            if !has_proxy_username {
+                let insert_pos = out_block.len().saturating_sub(
+                    out_block.iter().rev().take_while(|s| s.trim().is_empty()).count(),
+                );
+                out_block.insert(insert_pos.max(1), proxy_username_line);
+            }
+            if !has_proxy_password {
+                let insert_pos = out_block.len().saturating_sub(
+                    out_block.iter().rev().take_while(|s| s.trim().is_empty()).count(),
+                );
+                out_block.insert(insert_pos.max(1), proxy_password_line);
+            }
+
+            new_lines.extend(out_block);
+            new_lines.extend(lines[end..].iter().map(|s| s.to_string()));
+            new_lines.join("\n")
+        }
+        (None, _) => {
+            // provider 不存在，跳过代理设置（应由 save_provider_config 先创建 provider）
+            content.to_string()
+        }
+    }
+}
+
 /// 当 providers: 块内找不到目标 provider 时，将新块追加到 providers: 块内部。
 /// 追加位置：providers: 块的最后一个已有 provider 之后（而非根级末尾）。
 fn upsert_append_provider_inside_providers_block(content: &str, provider_id: &str, api_key_line: &str) -> String {
@@ -464,6 +630,9 @@ pub async fn save_provider_config(
     data_dir: tauri::State<'_, crate::AppState>,
     provider_id: String,
     api_key: String,
+    proxy_url: Option<String>,
+    proxy_username: Option<String>,
+    proxy_password: Option<String>,
 ) -> Result<String, String> {
     info!("保存供应商配置: {}", provider_id);
 
@@ -478,32 +647,46 @@ pub async fn save_provider_config(
         let api_key_clone = api_key.clone();
         move || {
             let key = crate::services::cipher::get_or_create_cipher_key_sync(&data_dir_clone)
-                .map_err(|e| format!("获取加密密钥失败: {}", e))?;
+                .map_err(|e| format!("Failed to get encryption key: {}", e))?;
             Ok::<_, String>(crate::services::cipher::encrypt_credential(&api_key_clone, &key))
         }
     })
     .await
-    .map_err(|e| format!("密钥任务失败: {}", e))?
+    .map_err(|e| format!("Key task failed: {}", e))?
     .map_err(|e| e)?;
 
+    // 先更新 api_key
     let new_content = upsert_provider_api_key(&content, &provider_id, &encrypted_api_key);
 
-    // 写入后 sync_all：避免少数用户机上“写了但立刻读不到/被杀进程丢失”的情况
+    // 再更新代理设置（如果提供）
+    let final_content = if proxy_url.is_some() || proxy_username.is_some() || proxy_password.is_some() {
+        upsert_provider_proxy_config(
+            &new_content,
+            &provider_id,
+            proxy_url.as_deref().unwrap_or(""),
+            proxy_username.as_deref().unwrap_or(""),
+            proxy_password.as_deref().unwrap_or(""),
+        )
+    } else {
+        new_content
+    };
+
+    // Write with sync_all to avoid data loss
     let mut f = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&config_path)
         .await
-        .map_err(|e| format!("保存配置失败（打开文件）: {}", e))?;
-    f.write_all(new_content.as_bytes())
+        .map_err(|e| format!("Failed to open config file: {}", e))?;
+    f.write_all(final_content.as_bytes())
         .await
-        .map_err(|e| format!("保存配置失败（写入）: {}", e))?;
+        .map_err(|e| format!("Failed to write config: {}", e))?;
     f.sync_all()
         .await
-        .map_err(|e| format!("保存配置失败（sync）: {}", e))?;
+        .map_err(|e| format!("Failed to sync config: {}", e))?;
 
-    Ok(format!("供应商 {} 配置已保存", provider_id))
+    Ok(format!("Provider {} config saved", provider_id))
 }
 
 async fn test_openai_compatible_chat(
@@ -512,11 +695,27 @@ async fn test_openai_compatible_chat(
     provider: &str,
     api_key: &str,
     model_name: &str,
+    proxy_url: Option<&str>,
+    proxy_username: Option<&str>,
+    proxy_password: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(45))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut client_builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45));
+
+    // 配置代理（如果提供）
+    if let Some(p_url) = proxy_url {
+        if !p_url.is_empty() {
+            let mut proxy = reqwest::Proxy::http(p_url).map_err(|e| e.to_string())?;
+            if let Some(user) = proxy_username {
+                if !user.is_empty() {
+                    proxy = proxy.basic_auth(user, proxy_password.unwrap_or(""));
+                }
+            }
+            client_builder = client_builder.proxy(proxy);
+        }
+    }
+
+    let client = client_builder.build().map_err(|e| e.to_string())?;
     let response = client
         .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
@@ -663,6 +862,9 @@ pub async fn test_model_connection(
     provider: String,
     model_name: String,
     api_key: String,
+    proxy_url: Option<String>,
+    proxy_username: Option<String>,
+    proxy_password: Option<String>,
 ) -> Result<serde_json::Value, String> {
     info!("测试模型连接: {} / {}", provider, model_name);
     let data_dir_clone = data_dir.inner().data_dir.lock().unwrap().clone();
@@ -834,6 +1036,9 @@ pub async fn test_model_connection(
                 &provider,
                 &api_key,
                 &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
             )
             .await
         }
@@ -892,10 +1097,23 @@ pub async fn test_model_connection(
                 "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
                 model_name, api_key
             );
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(45))
-                .build()
-                .map_err(|e| e.to_string())?;
+            let mut client_builder = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(45));
+
+            // 配置代理（如果提供）
+            if let Some(ref p_url) = proxy_url {
+                if !p_url.is_empty() {
+                    let mut proxy = reqwest::Proxy::http(p_url).map_err(|e| e.to_string())?;
+                    if let Some(ref user) = proxy_username {
+                        if !user.is_empty() {
+                            proxy = proxy.basic_auth(user, proxy_password.as_deref().unwrap_or(""));
+                        }
+                    }
+                    client_builder = client_builder.proxy(proxy);
+                }
+            }
+
+            let client = client_builder.build().map_err(|e| e.to_string())?;
             let response = client
                 .post(url)
                 .header("Content-Type", "application/json")
@@ -992,6 +1210,9 @@ pub async fn test_model_connection(
                 &provider,
                 &api_key,
                 &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
             )
             .await
         }
@@ -1002,6 +1223,9 @@ pub async fn test_model_connection(
                 &provider,
                 &api_key,
                 &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
             )
             .await
         }
@@ -1015,6 +1239,9 @@ pub async fn test_model_connection(
                 &provider,
                 &api_key,
                 &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
             )
             .await;
 
@@ -1046,6 +1273,9 @@ pub async fn test_model_connection(
                 &provider,
                 &api_key,
                 &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
             )
             .await
         }
@@ -1056,6 +1286,9 @@ pub async fn test_model_connection(
                 &provider,
                 &api_key,
                 &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
             )
             .await
         }
@@ -1066,6 +1299,9 @@ pub async fn test_model_connection(
                 &provider,
                 &api_key,
                 &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
             )
             .await
         }
@@ -1076,6 +1312,22 @@ pub async fn test_model_connection(
                 &provider,
                 &api_key,
                 &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
+            )
+            .await
+        }
+        "grok" => {
+            test_openai_compatible_chat(
+                "https://api.x.ai/v1/chat/completions",
+                &data_dir_clone,
+                &provider,
+                &api_key,
+                &model_name,
+                proxy_url.as_deref(),
+                proxy_username.as_deref(),
+                proxy_password.as_deref(),
             )
             .await
         }
@@ -1248,7 +1500,7 @@ pub async fn set_default_model(
     // 之前的实现对整个文件遍历，会错误替换 providers.*.provider 等无关行。
     let new_content = upsert_default_model_block(&content, &provider, &model_name);
 
-    // 写入后 sync_all：避免用户机上“保存提示成功/失败不一致”
+    // 写入后 sync_all：避免用户机上"保存提示成功/失败不一致"
     let mut f = OpenOptions::new()
         .create(true)
         .write(true)
@@ -1822,6 +2074,29 @@ fn static_provider_models(provider_id: &str) -> Vec<ModelEntry> {
                 Some("轻量"),
             ),
         ],
+        "grok" => vec![
+            me(
+                "grok-2-1212",
+                "Grok 2（xAI 旗舰）",
+                Some(131072),
+                false,
+                Some("旗舰"),
+            ),
+            me(
+                "grok-2",
+                "Grok 2",
+                Some(131072),
+                false,
+                Some("推荐"),
+            ),
+            me(
+                "grok-1",
+                "Grok 1",
+                Some(128000),
+                false,
+                Some("基础"),
+            ),
+        ],
         "baidu" => vec![
             me(
                 "ernie-5.0",
@@ -2202,6 +2477,7 @@ mod tests {
             ("aliyun", "helper"),
             ("zhipu", "helper"),
             ("moonshot", "helper"),
+            ("grok", "helper"),
             ("ollama", "direct"),
             ("xiaomi", "direct"),
         ];

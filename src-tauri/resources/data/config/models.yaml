@@ -103,11 +103,15 @@ providers:
         free: true
         recommended: false
 
-  # OpenAI
+  # OpenAI（支持代理模式）
   openai:
     enabled: false
     api_key: ""
     base_url: "https://api.openai.com/v1"
+    # 代理配置（可选，使用代理服务时填写）
+    proxy_url: ""
+    proxy_username: ""
+    proxy_password: ""
     models:
       - id: "gpt-4o"
         name: "GPT-4o"
@@ -146,6 +150,10 @@ providers:
     enabled: false
     api_key: ""
     base_url: "https://generativelanguage.googleapis.com/v1beta"
+    # 代理配置（可选，使用代理服务时填写）
+    proxy_url: ""
+    proxy_username: ""
+    proxy_password: ""
     models:
       - id: "gemini-2.5-pro-preview-03-25"
         name: "Gemini 2.5 Pro"
@@ -396,6 +404,26 @@ providers:
       - id: "Baichuan3"
         name: "百川 3"
         free: true
+
+  # Grok (xAI)
+  grok:
+    enabled: false
+    api_key: ""
+    base_url: "https://api.x.ai/v1"
+    # 代理配置（可选，使用代理服务时填写）
+    proxy_url: ""
+    proxy_username: ""
+    proxy_password: ""
+    models:
+      - id: "grok-2-1212"
+        name: "Grok 2（旗舰）"
+        free: false
+      - id: "grok-2"
+        name: "Grok 2"
+        free: false
+      - id: "grok-1"
+        name: "Grok 1"
+        free: false
 
   # 其他自定义 OpenAI 兼容 API
   custom:
