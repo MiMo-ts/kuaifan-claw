@@ -57,3 +57,7 @@ rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3.14"
+
+# 修复 macOS 上的 webview_version 崩溃问题
+[patch.crates-io]
+tauri-runtime-wry = { path = "patches/tauri-runtime-wry" }
