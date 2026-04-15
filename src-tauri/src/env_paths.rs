@@ -508,6 +508,86 @@ pub async fn unzip(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 解压 .tar.gz 文件到目标目录（自动创建父目录，支持嵌套顶层文件夹）。
+/// 解压后自动检测并修正「版本子目录嵌套」问题（Node / Git 常见）。
+pub async fn tar_gz_extract(tar_path: &Path, dest_dir: &Path) -> Result<(), String> {
+    use flate2::read::GzDecoder;
+    use std::fs::File;
+    use std::io;
+
+    let file = File::open(tar_path).map_err(|e| format!("打开 tar.gz 失败: {}", e))?;
+    let dec = GzDecoder::new(file);
+    let mut archive = tar::Archive::new(dec);
+
+    // 先解压到临时目录，再检测是否需要抬升顶层目录
+    let temp_dir = tar_path
+        .parent()
+        .map(|p| p.join(format!(".tarball-extract-{}", std::process::id())))
+        .unwrap_or_else(|| std::env::temp_dir().join(format!(".tarball-extract-{}", std::process::id())));
+
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("创建临时解压目录失败: {}", e))?;
+
+    archive
+        .unpack(&temp_dir)
+        .map_err(|e| format!("解压 tar.gz 失败: {}", e))?;
+
+    // 检测顶层单一目录（node-v22.14.0-darwin-arm64/ 等）
+    let entries = std::fs::read_dir(&temp_dir)
+        .map_err(|e| format!("读取临时目录失败: {}", e))?
+        .filter_map(|e| e.ok())
+        .collect::<Vec<_>>();
+
+    if entries.len() == 1 {
+        if let Some(first) = entries.first() {
+            if first.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let top_dir = first.path();
+                // 将顶层目录的内容移动到目标目录
+                std::fs::create_dir_all(dest_dir)
+                    .map_err(|e| format!("创建目标目录失败: {}", e))?;
+                move_dir_contents(&top_dir, dest_dir)?;
+                std::fs::remove_dir_all(&temp_dir).ok();
+                info!(
+                    "解压完成（已抬升顶层目录）: {} → {}",
+                    tar_path.display(),
+                    dest_dir.display()
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    // 无顶层目录或多个条目，直接移动到目标目录
+    if temp_dir.exists() {
+        move_dir_contents(&temp_dir, dest_dir)?;
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    info!("解压完成: {} → {}", tar_path.display(), dest_dir.display());
+    Ok(())
+}
+
+/// 移动 src 目录内容到 dest 目录（递归）
+fn move_dir_contents(src: &Path, dest: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| format!("创建目标目录失败: {}", e))?;
+    if let Ok(entries) = std::fs::read_dir(src) {
+        for entry in entries.flatten() {
+            let src_path = entry.path();
+            let dest_path = dest.join(entry.file_name());
+            if src_path.is_dir() {
+                std::fs::create_dir_all(&dest_path)
+                    .map_err(|e| format!("创建子目录失败: {}", e))?;
+                move_dir_contents(&src_path, &dest_path)?;
+                std::fs::remove_dir_all(&src_path).ok();
+            } else {
+                std::fs::rename(&src_path, &dest_path)
+                    .map_err(|e| format!("移动文件失败: {}", e))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 在指定目录中运行 git clone（使用绝对路径的 git）
 pub async fn git_clone_with_exe(
     git_path: &Path,

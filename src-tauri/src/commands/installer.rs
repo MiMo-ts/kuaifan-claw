@@ -4,7 +4,7 @@ use crate::bundled_env::{
     resolve_bundled_openclaw_tarball, resolve_bundled_zip, resolve_bundled_zip_from_project,
 };
 use crate::env_paths::{
-    build_deps_env_path, env_root, git_exe, git_exists, node_exe, resolve_node, unzip,
+    build_deps_env_path, env_root, git_exe, git_exists, node_exe, resolve_node, tar_gz_extract, unzip,
 };
 #[cfg(target_os = "macos")]
 use crate::mirror::github_mirror_urls;
@@ -242,7 +242,7 @@ pub async fn install_node(
             .map_err(|e| format!("刷新文件失败: {}", e))?;
 
         emit(&app, InstallProgressEvent::progress("node", 80.0, "正在解压…"));
-        unzip(&tar_path, &dest).await?;
+        tar_gz_extract(&tar_path, &dest).await?;
         tokio::fs::remove_file(&tar_path).await.ok();
 
         let node_v = node_exe(&env_dir);
@@ -301,7 +301,7 @@ pub async fn install_node(
             &app,
             InstallProgressEvent::progress("node", 80.0, "正在解压…"),
         );
-        unzip(&tar_path, &dest).await?;
+        tar_gz_extract(&tar_path, &dest).await?;
         tokio::fs::remove_file(&tar_path).await.ok();
 
         let node_v = node_exe(&env_dir);
