@@ -283,19 +283,35 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
             InstallProgressEvent::started("homebrew", "正在安装 Homebrew（科大讯飞源）..."),
         );
 
-        // 直接使用科大讯飞源的安装脚本（已包含镜像配置）
+        // 先下载安装脚本，再用 bash 执行（环境变量需在脚本运行时生效）
+        let script_url = "https://mirrors.ustc.edu.cn/misc/brew-install.sh";
+
+        // 使用 curl 下载脚本到临时文件
+        let temp_dir = std::env::temp_dir();
+        let script_path = temp_dir.join("brew_install.sh");
+
+        let output = Command::new("curl")
+            .args(["-fsSL", script_url, "-o", &script_path.to_string_lossy()])
+            .output()
+            .map_err(|e| format!("下载安装脚本失败: {}", e))?;
+
+        if !output.status.success() {
+            return Err(format!("下载失败: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+
+        // 执行脚本（设置科大讯飞源环境变量）
         let status = Command::new("/bin/bash")
             .env("NONINTERACTIVE", "1")
-            // 科大讯飞源配置
             .env("HOMEBREW_BREW_GIT_REMOTE", "https://mirrors.ustc.edu.cn/brew.git")
             .env("HOMEBREW_CORE_GIT_REMOTE", "https://mirrors.ustc.edu.cn/homebrew-core.git")
             .env("HOMEBREW_BOTTLE_DOMAIN", "https://mirrors.ustc.edu.cn/homebrew-bottles")
             .env("HOMEBREW_API_DOMAIN", "https://mirrors.ustc.edu.cn/homebrew-bottles/api")
-            .arg("-c")
-            .arg("(curl -fsSL https://mirrors.ustc.edu.cn/misc/brew-install.sh)")
+            .arg(&script_path)
             .spawn()
             .and_then(|mut child| child.wait())
             .map_err(|e| format!("启动 Homebrew 安装脚本失败: {}", e))?;
+
+        let _ = tokio::fs::remove_file(&script_path).await;
 
         if status.success() {
             emit(
