@@ -664,7 +664,7 @@ pub async fn run_env_auto_fix(
                 Err(e) => {
                     // Homebrew 可选，不设置 any_err，只提示信息
                     messages.push(format!(
-                        "> Homebrew 跳过（可选，可手动安装 https://brew.sh）",
+                        "> Homebrew 跳过（可选，可手动安装 https://brew.sh）：{}",
                         e
                     ));
                     let _ = app.emit(
