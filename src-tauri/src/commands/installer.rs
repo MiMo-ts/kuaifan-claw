@@ -97,43 +97,35 @@ pub async fn install_node(
     let env_dir = env_root(&base);
     let dest = env_dir.join("node");
 
-    if node_exe(&env_dir).exists() {
-        let node_v = node_exe(&env_dir);
-        let v_out = Command::new(&node_v)
-            .arg("--version")
-            .output()
-            .map(|o| {
-                if o.status.success() {
-                    String::from_utf8_lossy(&o.stdout).trim().to_string()
-                } else {
-                    "unknown".to_string()
-                }
-            })
-            .unwrap_or_else(|_| "unknown".to_string());
-
-        if v_out != "unknown" {
+    // ── 1. 检测系统 Node.js ─────────────────────────────────
+    if let Ok(output) = Command::new("node").arg("--version").output() {
+        if output.status.success() {
+            let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
             emit(
                 &app,
-                InstallProgressEvent::finished(
-                    "node",
-                    &format!("Node.js 已存在于 data/env/node（{}），跳过", v_out),
-                ),
+                InstallProgressEvent::finished("node", &format!("使用系统 Node.js（{}）", v)),
             );
-            return Ok(format!("Node.js 已安装（自包含）：{}", v_out));
+            return Ok(format!("Node.js 已安装（系统）：{}", v));
         }
+    }
 
-        // node.exe 存在但无法执行（损坏/不完整/架构问题），清理后重新下载
-        warn!(
-            "data/env/node/node.exe 存在但执行失败（版本={})，将删除并重新下载",
-            v_out
-        );
-        emit(
-            &app,
-            InstallProgressEvent::detail(
-                "node",
-                &format!("Node.js 残留文件损坏（{}），正在重新下载...", v_out),
-            ),
-        );
+    // ── 2. 检测内置 Node.js ─────────────────────────────────
+    if node_exe(&env_dir).exists() {
+        let node_v = node_exe(&env_dir);
+        if let Ok(output) = Command::new(&node_v).arg("--version").output() {
+            if output.status.success() {
+                let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                emit(
+                    &app,
+                    InstallProgressEvent::finished(
+                        "node",
+                        &format!("使用内置 Node.js（{}）", v),
+                    ),
+                );
+                return Ok(format!("Node.js 已安装（内置）：{}", v));
+            }
+        }
+        // 内置版本损坏，清理
         let _ = tokio::fs::remove_dir_all(&dest).await;
     }
 
@@ -205,7 +197,69 @@ pub async fn install_node(
         Ok(format!("Node.js 安装成功（自包含）：{}", v_out))
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: 检测架构，下载对应版本
+        let is_arm64 = Command::new("uname")
+            .arg("-m")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "arm64")
+            .unwrap_or(false);
+
+        let arch = if is_arm64 { "arm64" } else { "x64" };
+        let tarball = format!("node-{}-darwin-{}.tar.gz", NODE_VERSION.trim_start_matches('v'), arch);
+        let url = format!("https://nodejs.org/dist/{}/{}", NODE_VERSION, tarball);
+
+        emit(
+            &app,
+            InstallProgressEvent::started("node", &format!("正在下载 Node.js {} macOS {} 版本…", NODE_VERSION, arch)),
+        );
+
+        let temp_dir = std::env::temp_dir();
+        let tar_path = temp_dir.join(&tarball);
+
+        let client = reqwest::Client::new();
+        let mut resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("下载失败: {}", e))?;
+
+        let mut file = tokio::fs::File::create(&tar_path)
+            .await
+            .map_err(|e| format!("创建文件失败: {}", e))?;
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| format!("读取流失败: {}", e))?
+        {
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| format!("写入失败: {}", e))?;
+        }
+        file.flush()
+            .await
+            .map_err(|e| format!("刷新文件失败: {}", e))?;
+
+        emit(&app, InstallProgressEvent::progress("node", 80.0, "正在解压…"));
+        unzip(&tar_path, &dest).await?;
+        tokio::fs::remove_file(&tar_path).await.ok();
+
+        let node_v = node_exe(&env_dir);
+        let v_out = Command::new(&node_v)
+            .arg("--version")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        emit(
+            &app,
+            InstallProgressEvent::finished("node", &format!("Node.js 安装完成（{}）", v_out)),
+        );
+        Ok(format!("Node.js 安装成功（macOS {}）：{}", arch, v_out))
+    }
+
+    #[cfg(target_os = "linux")]
     {
         let temp_dir = std::env::temp_dir();
         let tar_path = temp_dir.join(NODE_LINUX_TAR);
@@ -425,60 +479,43 @@ pub async fn install_pnpm(app: AppHandle) -> Result<String, String> {
     }
 }
 
-// 安装 Git（自包含模式：下载 MinGit 便携版 zip，解压到 data/env/git）
+// 安装 Git（自包含模式：优先使用系统 Git，否则使用内置 MinGit）
 #[tauri::command]
 pub async fn install_git(
     app: AppHandle,
     data_dir: tauri::State<'_, crate::AppState>,
 ) -> Result<String, String> {
-    info!("开始安装 Git（自包含）...");
+    info!("开始安装 Git...");
 
     let base = self_data_dir(&data_dir);
     let env_dir = env_root(&base);
     let dest = env_dir.join("git");
 
-    // 复用 resolve_git 逻辑：优先用自包含 git.exe
+    // ── 1. 检测系统 Git ─────────────────────────────────
+    if let Ok(output) = Command::new("git").arg("--version").output() {
+        if output.status.success() {
+            let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            emit(&app, InstallProgressEvent::finished("git", &format!("使用系统 Git（{}）", v)));
+            return Ok(format!("Git 已安装（系统）：{}", v));
+        }
+    }
+
+    // ── 2. 检测内置 Git ─────────────────────────────────
     if git_exists(&env_dir) {
         let git_v = git_exe(&env_dir);
-        let v_out = Command::new(&git_v)
-            .arg("--version")
-            .output()
-            .map(|o| {
-                if o.status.success() {
-                    String::from_utf8_lossy(&o.stdout).trim().to_string()
-                } else {
-                    "unknown".to_string()
-                }
-            })
-            .unwrap_or_else(|_| "unknown".to_string());
-
-        if v_out != "unknown" {
-            emit(
-                &app,
-                InstallProgressEvent::finished(
-                    "git",
-                    &format!("Git 已存在于 data/env/git（{}），跳过", v_out),
-                ),
-            );
-            return Ok(format!("Git 已安装（自包含）：{}", v_out));
+        if let Ok(output) = Command::new(&git_v).arg("--version").output() {
+            if output.status.success() {
+                let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                emit(&app, InstallProgressEvent::finished("git", &format!("使用内置 Git（{}）", v)));
+                return Ok(format!("Git 已安装（内置）：{}", v));
+            }
         }
-
-        warn!(
-            "data/env/git/cmd/git.exe 存在但执行失败（版本={})，将删除并重新下载",
-            v_out
-        );
-        emit(
-            &app,
-            InstallProgressEvent::detail(
-                "git",
-                &format!("Git 残留文件损坏（{}），正在重新下载...", v_out),
-            ),
-        );
+        // 内置版本损坏，清理
         let _ = tokio::fs::remove_dir_all(&dest).await;
     }
 
     info!(
-        "开始安装 Git {}（MinGit 便携版，内置 zip 解压）至 {}",
+        "开始安装 Git {}（MinGit 便携版）至 {}",
         crate::mirror::MINGIT_VERSION,
         dest.display()
     );
@@ -500,10 +537,7 @@ pub async fn install_git(
             &app,
             InstallProgressEvent::started(
                 "git",
-                &format!(
-                    "正在从内置包解压 Git {}（离线）…",
-                    crate::mirror::MINGIT_VERSION
-                ),
+                &format!("正在从内置包解压 Git {}（离线）…", crate::mirror::MINGIT_VERSION),
             ),
         );
         info!("Git 使用内置包: {}", zip_path.display());
@@ -514,7 +548,6 @@ pub async fn install_git(
         );
         unzip(&zip_path, &dest).await?;
 
-        // 验证 git.exe 是否可用
         let git_v = git_exe(&env_dir);
         let v_out = Command::new(&git_v)
             .arg("--version")
@@ -523,66 +556,64 @@ pub async fn install_git(
             .unwrap_or_else(|_| "unknown".to_string());
 
         if v_out != "unknown" {
-            emit(
-                &app,
-                InstallProgressEvent::finished("git", &format!("Git 安装完成（{}）", v_out)),
-            );
-            Ok(format!("Git 安装成功（自包含）：{}", v_out))
+            emit(&app, InstallProgressEvent::finished("git", &format!("Git 安装完成（{}）", v_out)));
+            Ok(format!("Git 安装成功（内置）：{}", v_out))
         } else {
-            emit(
-                &app,
-                InstallProgressEvent::failed(
-                    "git",
-                    "Git 解压后执行失败，请检查是否下载到受保护目录",
-                ),
-            );
-            Err("Git 安装后执行失败（可能目录权限问题）".to_string())
+            emit(&app, InstallProgressEvent::failed("git", "Git 解压后执行失败"));
+            Err("Git 安装后执行失败".to_string())
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        // macOS / Linux：通过 Homebrew / apt 安装 Git（保持原有行为）
-        #[cfg(target_os = "macos")]
-        {
+        // macOS: 尝试使用内置 MinGit，如果没有则提示用户安装 Xcode Command Line Tools
+        let zip_path = resolve_bundled_zip_from_project(crate::mirror::MINGIT_ZIP)
+            .or_else(|| resolve_bundled_zip(&app, crate::mirror::MINGIT_ZIP));
+
+        if let Some(zip) = zip_path {
             emit(
                 &app,
-                InstallProgressEvent::started("git", "通过 Homebrew 安装 Git..."),
+                InstallProgressEvent::started(
+                    "git",
+                    &format!("正在从内置包解压 Git {}（离线）…", crate::mirror::MINGIT_VERSION),
+                ),
             );
-            let output = Command::new("brew")
-                .args(["install", "git"])
-                .output()
-                .map_err(|e| format!("安装失败: {}", e))?;
+            unzip(&zip, &dest).await?;
 
-            if output.status.success() {
-                emit(&app, InstallProgressEvent::finished("git", "Git 安装完成"));
-                Ok("Git 安装成功".to_string())
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                emit(&app, InstallProgressEvent::failed("git", &stderr));
-                Err(format!("Homebrew 安装 Git 失败: {}", stderr))
+            let git_v = git_exe(&env_dir);
+            let v_out = Command::new(&git_v)
+                .arg("--version")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
+
+            if v_out != "unknown" {
+                emit(&app, InstallProgressEvent::finished("git", &format!("Git 安装完成（{}）", v_out)));
+                return Ok(format!("Git 安装成功（内置）：{}", v_out));
             }
         }
 
-        #[cfg(target_os = "linux")]
-        {
-            emit(
-                &app,
-                InstallProgressEvent::started("git", "通过 apt 安装 Git..."),
-            );
-            let output = Command::new("sudo")
-                .args(["apt", "install", "-y", "git"])
-                .output()
-                .map_err(|e| format!("安装失败: {}", e))?;
+        // 没有内置 MinGit，提示用户安装 Xcode Command Line Tools
+        emit(&app, InstallProgressEvent::failed("git", "未找到 Git，请运行: xcode-select --install"));
+        Err("macOS Git 未安装，请运行 'xcode-select --install' 安装 Xcode Command Line Tools".to_string())
+    }
 
-            if output.status.success() {
-                emit(&app, InstallProgressEvent::finished("git", "Git 安装完成"));
-                Ok("Git 安装成功".to_string())
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                emit(&app, InstallProgressEvent::failed("git", &stderr));
-                Err(format!("apt 安装 Git 失败: {}", stderr))
-            }
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: 尝试 apt 安装
+        emit(&app, InstallProgressEvent::started("git", "通过 apt 安装 Git..."));
+        let output = Command::new("sudo")
+            .args(["apt", "install", "-y", "git"])
+            .output()
+            .map_err(|e| format!("安装失败: {}", e))?;
+
+        if output.status.success() {
+            emit(&app, InstallProgressEvent::finished("git", "Git 安装完成"));
+            Ok("Git 安装成功（apt）".to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            emit(&app, InstallProgressEvent::failed("git", &stderr));
+            Err(format!("apt 安装 Git 失败: {}", stderr))
         }
     }
 }
