@@ -55,6 +55,9 @@ pnpm-debug.log*
 *.zip
 *.tar.gz
 *.tar.bz2
+# Exception: Homebrew offline tarballs (bundled for macOS install)
+!src-tauri/bundled-env/brew.git.tar.gz
+!src-tauri/bundled-env/homebrew-core.git.tar.gz
 
 # Project-level node_modules (e.g. root-level tooling)
 node_modules/
