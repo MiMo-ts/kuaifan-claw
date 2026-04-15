@@ -643,15 +643,15 @@ pub async fn run_env_auto_fix(
     let mut messages = Vec::new();
     let mut any_err = false;
 
-    // ── macOS: 优先确保 Homebrew 就位 ──────────────────────────
+    // ── macOS: Homebrew 安装（可选，不阻塞其他组件）───────────────
     #[cfg(target_os = "macos")]
     {
         let brew = check_homebrew().await?;
         if brew.status != EnvStatus::Success {
-            messages.push(">>> 检测到 Homebrew 未安装，正在下载...".to_string());
+            messages.push("> Homebrew 未安装（可选，用于安装 Node/Git）".to_string());
             let _ = app.emit(
                 "install-progress",
-                InstallProgressEvent::started("homebrew", "检测到 Homebrew 未安装，正在下载..."),
+                InstallProgressEvent::started("homebrew", "Homebrew 未安装（跳过，安装 Node/Git 备用方案）"),
             );
             match crate::commands::installer::install_homebrew(app.clone()).await {
                 Ok(m) => {
@@ -662,14 +662,14 @@ pub async fn run_env_auto_fix(
                     );
                 }
                 Err(e) => {
-                    any_err = true;
+                    // Homebrew 可选，不设置 any_err，只提示信息
                     messages.push(format!(
-                        "Homebrew 安装失败: {}（请手动安装 https://brew.sh）",
+                        "> Homebrew 跳过（可选，可手动安装 https://brew.sh）",
                         e
                     ));
                     let _ = app.emit(
                         "install-progress",
-                        InstallProgressEvent::failed("homebrew", &e),
+                        InstallProgressEvent::detail("homebrew", &format!("Homebrew 可选，跳过：{}", e)),
                     );
                 }
             }
