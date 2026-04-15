@@ -275,42 +275,47 @@ pub async fn check_homebrew() -> Result<EnvItem, String> {
     {
         info!("检查 Homebrew...");
 
-        match Command::new("brew").arg("--version").output() {
-            Ok(output) if output.status.success() => {
-                let first = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                Ok(EnvItem {
-                    name: "Homebrew".to_string(),
-                    version: None,
-                    status: EnvStatus::Success,
-                    message: if first.is_empty() {
-                        "已安装".to_string()
-                    } else {
-                        format!("已安装（{}）", first)
-                    },
-                    required: false,
-                })
+        // 尝试多个可能的 brew 路径（GUI 应用可能没有完整 PATH）
+        let brew_paths = [
+            "brew",
+            "/opt/homebrew/bin/brew",
+            "/usr/local/bin/brew",
+            "/home/linuxbrew/.linuxbrew/bin/brew",
+        ];
+
+        for brew_path in &brew_paths {
+            match Command::new(brew_path).arg("--version").output() {
+                Ok(output) if output.status.success() => {
+                    let first = String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    return Ok(EnvItem {
+                        name: "Homebrew".to_string(),
+                        version: None,
+                        status: EnvStatus::Success,
+                        message: if first.is_empty() {
+                            format!("已安装 ({})", brew_path)
+                        } else {
+                            format!("已安装（{}）", first)
+                        },
+                        required: false,
+                    });
+                }
+                _ => continue,
             }
-            Ok(_) => Ok(EnvItem {
-                name: "Homebrew".to_string(),
-                version: None,
-                status: EnvStatus::Warning,
-                message: "未检测到 brew（可选：用于一键安装 Node/Git，见 https://brew.sh）"
-                    .to_string(),
-                required: false,
-            }),
-            Err(_) => Ok(EnvItem {
-                name: "Homebrew".to_string(),
-                version: None,
-                status: EnvStatus::Warning,
-                message: "未检测到 brew，请确认已在 PATH 中（安装见 https://brew.sh）".to_string(),
-                required: false,
-            }),
         }
+
+        // 所有路径都失败
+        Ok(EnvItem {
+            name: "Homebrew".to_string(),
+            version: None,
+            status: EnvStatus::Warning,
+            message: "未检测到 Homebrew（可选，用于一键安装 Node/Git，见 https://brew.sh）".to_string(),
+            required: false,
+        })
     }
 }
 
