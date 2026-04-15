@@ -276,22 +276,16 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
 
     #[cfg(target_os = "macos")]
     {
-        let temp_dir = std::env::temp_dir();
-        let script_path = temp_dir.join("brew_install.sh");
-
-        // 方案1: 科大讯飞源
+        // 方案1: 科大讯飞源（官方脚本 + 环境变量）
         info!("尝试方案1: 科大讯飞源...");
         emit(
             &_app,
             InstallProgressEvent::started("homebrew", "正在安装 Homebrew（科大讯飞源）..."),
         );
 
-        if let Ok(_) = try_install_homebrew_ustc(&script_path).await {
-            emit(
-                &_app,
-                InstallProgressEvent::finished("homebrew", "Homebrew 安装成功"),
-            );
-            return Ok("Homebrew 安装成功（科大讯飞源），请重启终端后运行 `brew doctor` 验证".to_string());
+        if let Ok(msg) = try_install_homebrew_ustc().await {
+            emit(&_app, InstallProgressEvent::finished("homebrew", "Homebrew 安装成功"));
+            return Ok(msg);
         }
 
         // 方案2: GitHub 官方源 + ghproxy 镜像
@@ -301,12 +295,9 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
             InstallProgressEvent::started("homebrew", "方案1失败，尝试 GitHub 镜像源..."),
         );
 
-        if let Ok(_) = try_install_homebrew_ghproxy(&script_path).await {
-            emit(
-                &_app,
-                InstallProgressEvent::finished("homebrew", "Homebrew 安装成功"),
-            );
-            return Ok("Homebrew 安装成功（ghproxy 镜像），请重启终端后运行 `brew doctor` 验证".to_string());
+        if let Ok(msg) = try_install_homebrew_ghproxy().await {
+            emit(&_app, InstallProgressEvent::finished("homebrew", "Homebrew 安装成功"));
+            return Ok(msg);
         }
 
         emit(
@@ -317,73 +308,62 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
     }
 }
 
-/// 尝试使用科大讯飞源安装 Homebrew
-async fn try_install_homebrew_ustc(script_path: &std::path::Path) -> Result<(), String> {
-    let script_url = "https://mirrors.ustc.edu.cn/misc/brew-install.sh";
+/// 尝试使用科大讯飞源安装 Homebrew（官方脚本 + 环境变量）
+async fn try_install_homebrew_ustc() -> Result<String, String> {
+    // 使用 bash -c 直接执行命令（更可靠）
+    let install_cmd = r#"
+        export NONINTERACTIVE=1
+        export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"
+        export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.ustc.edu.cn/homebrew-core.git"
+        export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
+        export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+        /bin/bash -c "$(curl -fsSL https://github.com/Homebrew/install/raw/HEAD/install.sh)"
+    "#;
 
-    // 下载脚本
-    let output = Command::new("curl")
-        .args(["-fsSL", script_url, "-o", &script_path.to_string_lossy()])
+    let output = Command::new("/bin/bash")
+        .args(["-c", install_cmd])
         .output()
-        .map_err(|e| format!("下载安装脚本失败: {}", e))?;
+        .map_err(|e| format!("执行安装命令失败: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!("下载失败: {}", String::from_utf8_lossy(&output.stderr)));
-    }
-
-    // 执行脚本（设置科大讯飞源环境变量）
-    let status = Command::new("/bin/bash")
-        .env("NONINTERACTIVE", "1")
-        .env("HOMEBREW_BREW_GIT_REMOTE", "https://mirrors.ustc.edu.cn/brew.git")
-        .env("HOMEBREW_CORE_GIT_REMOTE", "https://mirrors.ustc.edu.cn/homebrew-core.git")
-        .env("HOMEBREW_BOTTLE_DOMAIN", "https://mirrors.ustc.edu.cn/homebrew-bottles")
-        .env("HOMEBREW_API_DOMAIN", "https://mirrors.ustc.edu.cn/homebrew-bottles/api")
-        .arg(script_path)
-        .spawn()
-        .and_then(|mut child| child.wait())
-        .map_err(|e| format!("启动安装脚本失败: {}", e))?;
-
-    let _ = tokio::fs::remove_file(script_path).await;
-
-    if status.success() {
-        Ok(())
+    if output.status.success() {
+        Ok("Homebrew 安装成功（科大讯飞源），请重启终端后运行 `brew doctor` 验证".to_string())
     } else {
-        Err("科大讯飞源安装失败".to_string())
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!(
+            "科大讯飞源安装失败\nstdout: {}\nstderr: {}",
+            stdout.trim(),
+            stderr.trim()
+        ))
     }
 }
 
 /// 尝试使用 GitHub + ghproxy 镜像安装 Homebrew
-async fn try_install_homebrew_ghproxy(script_path: &std::path::Path) -> Result<(), String> {
-    let script_url = "https://ghproxy.net/https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh";
+async fn try_install_homebrew_ghproxy() -> Result<String, String> {
+    let install_cmd = r#"
+        export NONINTERACTIVE=1
+        export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/homebrew/brew.git"
+        export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/homebrew/core.git"
+        export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew/bottles"
+        export HOMEBREW_API_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew/api"
+        /bin/bash -c "$(curl -fsSL https://ghproxy.net/https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    "#;
 
-    // 下载脚本
-    let output = Command::new("curl")
-        .args(["-fsSL", script_url, "-o", &script_path.to_string_lossy()])
+    let output = Command::new("/bin/bash")
+        .args(["-c", install_cmd])
         .output()
-        .map_err(|e| format!("下载安装脚本失败: {}", e))?;
+        .map_err(|e| format!("执行安装命令失败: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!("下载失败: {}", String::from_utf8_lossy(&output.stderr)));
-    }
-
-    // 执行脚本（设置清华源环境变量）
-    let status = Command::new("/bin/bash")
-        .env("NONINTERACTIVE", "1")
-        .env("HOMEBREW_BREW_GIT_REMOTE", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/brew.git")
-        .env("HOMEBREW_CORE_GIT_REMOTE", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/core.git")
-        .env("HOMEBREW_BOTTLE_DOMAIN", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/bottles")
-        .env("HOMEBREW_API_DOMAIN", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/api")
-        .arg(script_path)
-        .spawn()
-        .and_then(|mut child| child.wait())
-        .map_err(|e| format!("启动安装脚本失败: {}", e))?;
-
-    let _ = tokio::fs::remove_file(script_path).await;
-
-    if status.success() {
-        Ok(())
+    if output.status.success() {
+        Ok("Homebrew 安装成功（ghproxy 镜像），请重启终端后运行 `brew doctor` 验证".to_string())
     } else {
-        Err("ghproxy 镜像安装失败".to_string())
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!(
+            "ghproxy 镜像安装失败\nstdout: {}\nstderr: {}",
+            stdout.trim(),
+            stderr.trim()
+        ))
     }
 }
 
