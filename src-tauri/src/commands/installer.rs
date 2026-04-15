@@ -265,7 +265,7 @@ pub async fn install_node(
     }
 }
 
-/// 安装 Homebrew（仅 macOS；使用官方安装脚本+国内镜像）
+/// 安装 Homebrew（仅 macOS；使用科大讯飞源）
 #[tauri::command]
 pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
     #[cfg(not(target_os = "macos"))]
@@ -276,61 +276,33 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
 
     #[cfg(target_os = "macos")]
     {
-        info!("开始安装 Homebrew（镜像模式）...");
-
-        // 使用 ghproxy 镜像下载官方安装脚本
-        let brew_script_urls = github_mirror_urls(
-            "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh",
-        );
+        info!("开始安装 Homebrew（科大讯飞源）...");
 
         emit(
             &_app,
-            InstallProgressEvent::started("homebrew", "正在下载 Homebrew 安装脚本..."),
-        );
-        let temp_dir = std::env::temp_dir();
-        let script_path = temp_dir.join("brew_install.sh");
-
-        let brew_urls: Vec<&str> = brew_script_urls.iter().map(|s| s.as_str()).collect();
-        download_with_mirrors(
-            &reqwest::Client::new(),
-            brew_urls,
-            &script_path,
-            "homebrew",
-            &_app,
-            None,
-        )
-        .await
-        .map_err(|e| format!("下载安装脚本失败: {}", e))?;
-
-        emit(
-            &_app,
-            InstallProgressEvent::progress("homebrew", 60.0, "正在执行 Homebrew 安装脚本（使用国内镜像）..."),
+            InstallProgressEvent::started("homebrew", "正在安装 Homebrew（科大讯飞源）..."),
         );
 
-        // 设置 Homebrew 国内镜像环境变量（清华源）
-        let mut cmd = Command::new("/bin/bash");
-        cmd.env("NONINTERACTIVE", "1")
-            .env("HOMEBREW_API_DOMAIN", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/api")
-            .env("HOMEBREW_BOTTLE_DOMAIN", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/bottles")
-            .env("HOMEBREW_BREW_GIT_REMOTE", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/brew.git")
-            .env("HOMEBREW_CORE_GIT_REMOTE", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/core.git")
-            .env("HOMEBREW_PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
-            .env("HOMEBREW_PIP_INDEX_BINARY_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
-            .arg(&script_path);
-
-        let status = cmd
+        // 直接使用科大讯飞源的安装脚本（已包含镜像配置）
+        let status = Command::new("/bin/bash")
+            .env("NONINTERACTIVE", "1")
+            // 科大讯飞源配置
+            .env("HOMEBREW_BREW_GIT_REMOTE", "https://mirrors.ustc.edu.cn/brew.git")
+            .env("HOMEBREW_CORE_GIT_REMOTE", "https://mirrors.ustc.edu.cn/homebrew-core.git")
+            .env("HOMEBREW_BOTTLE_DOMAIN", "https://mirrors.ustc.edu.cn/homebrew-bottles")
+            .env("HOMEBREW_API_DOMAIN", "https://mirrors.ustc.edu.cn/homebrew-bottles/api")
+            .arg("-c")
+            .arg("(curl -fsSL https://mirrors.ustc.edu.cn/misc/brew-install.sh)")
             .spawn()
             .and_then(|mut child| child.wait())
             .map_err(|e| format!("启动 Homebrew 安装脚本失败: {}", e))?;
-
-        let _ = tokio::fs::remove_file(&script_path).await;
 
         if status.success() {
             emit(
                 &_app,
                 InstallProgressEvent::finished("homebrew", "Homebrew 安装成功"),
             );
-            Ok("Homebrew 安装成功（已配置清华镜像），请重启终端后运行 `brew doctor` 验证".to_string())
+            Ok("Homebrew 安装成功（科大讯飞源），请重启终端后运行 `brew doctor` 验证".to_string())
         } else {
             emit(
                 &_app,
