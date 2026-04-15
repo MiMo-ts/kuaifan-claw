@@ -311,7 +311,7 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
         // 解压 brew 主仓库
         emit(
             &_app,
-            InstallProgressEvent::progress(20.0, "正在解压 Homebrew 主仓库..."),
+            InstallProgressEvent::progress("homebrew", 20.0, "正在解压 Homebrew 主仓库..."),
         );
         info!("解压 Homebrew 主仓库: {:?}", brew_tarball);
 
@@ -328,7 +328,7 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
         if let Some(core_tar) = core_tarball {
             emit(
                 &_app,
-                InstallProgressEvent::progress(50.0, "正在解压 homebrew-core..."),
+                InstallProgressEvent::progress("homebrew", 50.0, "正在解压 homebrew-core..."),
             );
             info!("解压 homebrew-core: {:?}", core_tar);
 
@@ -344,7 +344,7 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
         // 创建必要的符号链接和目录结构
         emit(
             &_app,
-            InstallProgressEvent::progress(80.0, "正在配置 Homebrew 环境..."),
+            InstallProgressEvent::progress("homebrew", 80.0, "正在配置 Homebrew 环境..."),
         );
 
         // 设置环境变量并验证安装
