@@ -265,12 +265,7 @@ pub async fn install_node(
     }
 }
 
-/// 内置 Homebrew tarball 文件名（brew 主仓库）
-const BUNDLED_BREW_TARBALL: &str = "brew.git.tar.gz";
-/// 内置 Homebrew core tarball 文件名（homebrew-core 仓库）
-const BUNDLED_HOMEBREW_CORE_TARBALL: &str = "homebrew-core.git.tar.gz";
-
-/// 安装 Homebrew（仅 macOS；离线内置包安装）
+/// 安装 Homebrew（仅 macOS；使用官方安装脚本+国内镜像）
 #[tauri::command]
 pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
     #[cfg(not(target_os = "macos"))]
@@ -281,147 +276,69 @@ pub async fn install_homebrew(_app: AppHandle) -> Result<String, String> {
 
     #[cfg(target_os = "macos")]
     {
-        info!("开始安装 Homebrew（离线内置模式）...");
+        info!("开始安装 Homebrew（镜像模式）...");
 
-        // 检查内置 tarball 是否存在
-        let brew_tarball = resolve_bundled_zip_from_project(BUNDLED_BREW_TARBALL);
-        let core_tarball = resolve_bundled_zip_from_project(BUNDLED_HOMEBREW_CORE_TARBALL);
-
-        if brew_tarball.is_none() {
-            return Err("未找到内置 Homebrew brew.tar.gz，请确认打包资源中包含 brew.git.tar.gz".to_string());
-        }
+        // 使用 ghproxy 镜像下载官方安装脚本
+        let brew_script_urls = github_mirror_urls(
+            "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh",
+        );
 
         emit(
             &_app,
-            InstallProgressEvent::started(
-                "homebrew",
-                "正在从内置 tarball 安装 Homebrew...",
-            ),
+            InstallProgressEvent::started("homebrew", "正在下载 Homebrew 安装脚本..."),
         );
+        let temp_dir = std::env::temp_dir();
+        let script_path = temp_dir.join("brew_install.sh");
 
-        // Homebrew 安装目录
-        let homebrew_prefix = "/opt/homebrew";
-        let brew_dest = PathBuf::from(homebrew_prefix);
-        let taps_dest = PathBuf::from(homebrew_prefix)
-            .join("Library")
-            .join("Taps")
-            .join("homebrew")
-            .join("homebrew-core");
-
-        // 解压 brew 主仓库
-        emit(
+        let brew_urls: Vec<&str> = brew_script_urls.iter().map(|s| s.as_str()).collect();
+        download_with_mirrors(
+            &reqwest::Client::new(),
+            brew_urls,
+            &script_path,
+            "homebrew",
             &_app,
-            InstallProgressEvent::progress("homebrew", 20.0, "正在解压 Homebrew 主仓库..."),
-        );
-        info!("解压 Homebrew 主仓库: {:?}", brew_tarball);
-
-        // 使用 tokio 线程池执行阻塞的解压操作
-        let brew_tarball = brew_tarball.unwrap();
-        let brew_dest_clone = brew_dest.clone();
-        tokio::task::spawn_blocking(move || {
-            unpack_homebrew_tarball(&brew_tarball, &brew_dest_clone, "brew-master")
-        })
+            None,
+        )
         .await
-        .map_err(|e| format!("解压任务失败: {}", e))??;
+        .map_err(|e| format!("下载安装脚本失败: {}", e))?;
 
-        // 解压 homebrew-core（如果存在）
-        if let Some(core_tar) = core_tarball {
+        emit(
+            &_app,
+            InstallProgressEvent::progress("homebrew", 60.0, "正在执行 Homebrew 安装脚本（使用国内镜像）..."),
+        );
+
+        // 设置 Homebrew 国内镜像环境变量（清华源）
+        let mut cmd = Command::new("/bin/bash");
+        cmd.env("NONINTERACTIVE", "1")
+            .env("HOMEBREW_API_DOMAIN", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/api")
+            .env("HOMEBREW_BOTTLE_DOMAIN", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/bottles")
+            .env("HOMEBREW_BREW_GIT_REMOTE", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/brew.git")
+            .env("HOMEBREW_CORE_GIT_REMOTE", "https://mirrors.tuna.tsinghua.edu.cn/homebrew/core.git")
+            .env("HOMEBREW_PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
+            .env("HOMEBREW_PIP_INDEX_BINARY_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
+            .arg(&script_path);
+
+        let status = cmd
+            .spawn()
+            .and_then(|mut child| child.wait())
+            .map_err(|e| format!("启动 Homebrew 安装脚本失败: {}", e))?;
+
+        let _ = tokio::fs::remove_file(&script_path).await;
+
+        if status.success() {
             emit(
                 &_app,
-                InstallProgressEvent::progress("homebrew", 50.0, "正在解压 homebrew-core..."),
+                InstallProgressEvent::finished("homebrew", "Homebrew 安装成功"),
             );
-            info!("解压 homebrew-core: {:?}", core_tar);
-
-            let core_tar = core_tar;
-            let taps_dest_clone = taps_dest.clone();
-            tokio::task::spawn_blocking(move || {
-                unpack_homebrew_tarball(&core_tar, &taps_dest_clone, "homebrew-core-main")
-            })
-            .await
-            .map_err(|e| format!("解压任务失败: {}", e))??;
+            Ok("Homebrew 安装成功（已配置清华镜像），请重启终端后运行 `brew doctor` 验证".to_string())
+        } else {
+            emit(
+                &_app,
+                InstallProgressEvent::failed("homebrew", "安装脚本执行失败"),
+            );
+            Err("Homebrew 安装脚本执行失败，请检查网络或手动安装（见 https://brew.sh）".to_string())
         }
-
-        // 创建必要的符号链接和目录结构
-        emit(
-            &_app,
-            InstallProgressEvent::progress("homebrew", 80.0, "正在配置 Homebrew 环境..."),
-        );
-
-        // 设置环境变量并验证安装
-        let mut cmd = Command::new("/bin/bash");
-        cmd.env("HOMEBREW_PREFIX", homebrew_prefix)
-            .env("HOMEBREW_DIR", homebrew_prefix)
-            .env("PATH", format!("{}/bin:{}/sbin:$PATH", homebrew_prefix, homebrew_prefix));
-
-        emit(
-            &_app,
-            InstallProgressEvent::finished("homebrew", "Homebrew 安装成功（离线内置）"),
-        );
-
-        Ok(format!(
-            "Homebrew 安装成功（离线内置模式）\n安装路径: {}\n请运行 `brew doctor` 验证",
-            homebrew_prefix
-        ))
     }
-}
-
-/// 解压 Homebrew tarball 到目标目录
-fn unpack_homebrew_tarball(tarball: &PathBuf, dest: &PathBuf, expected_dir: &str) -> Result<(), String> {
-    use flate2::read::GzDecoder;
-    use std::fs;
-    use std::io::Cursor;
-
-    let tarball_bytes = fs::read(tarball).map_err(|e| format!("读取 tarball 失败: {}", e))?;
-    let cursor = Cursor::new(tarball_bytes);
-    let dec = GzDecoder::new(cursor);
-    let mut archive = tar::Archive::new(dec);
-
-    // 创建临时目录
-    let temp_dir = std::env::temp_dir().join(format!("brew-extract-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
-
-    // 解压到临时目录
-    archive.unpack(&temp_dir).map_err(|e| format!("解压失败: {}", e))?;
-
-    // 检查解压出的目录
-    let temp_entries: Vec<_> = fs::read_dir(&temp_dir)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-
-    if temp_entries.len() != 1 {
-        return Err(format!("归档应仅含一个根目录，实际 {} 项", temp_entries.len()));
-    }
-
-    let extracted_dir = temp_entries[0].path();
-    let extracted_name = extracted_dir.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-
-    // 验证目录名
-    if extracted_name != expected_dir {
-        return Err(format!(
-            "解压目录名不匹配: 期望「{}」，实际「{}」",
-            expected_dir, extracted_name
-        ));
-    }
-
-    // 创建目标父目录
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
-    }
-
-    // 移动到目标位置
-    if dest.exists() {
-        fs::remove_dir_all(dest).map_err(|e| format!("删除旧目录失败: {}", e))?;
-    }
-    fs::rename(&extracted_dir, dest).map_err(|e| format!("移动目录失败: {}", e))?;
-
-    // 清理临时目录
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    Ok(())
 }
 
 // 安装 pnpm
