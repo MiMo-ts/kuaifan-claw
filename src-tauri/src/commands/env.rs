@@ -2,7 +2,7 @@
 
 use crate::env_paths::{env_root, npm_exe, resolve_git, resolve_node};
 use crate::models::{EnvAutoFixResult, EnvCheckResult, EnvItem, EnvStatus};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -172,6 +172,60 @@ pub async fn check_npm_version(
     let data_base = data_dir.inner().data_dir.lock().unwrap().clone();
     let env_dir = env_root(&data_base);
 
+    // macOS GUI 进程的 PATH 可能不完整，额外检查常见路径
+    #[cfg(target_os = "macos")]
+    {
+        let common_npm_paths = [
+            "/usr/local/bin/npm",
+            "/opt/homebrew/bin/npm",
+            "/opt/homebrew/opt/node/bin/npm",
+            "/opt/local/bin/npm",
+            "/usr/local/opt/node/bin/npm",
+        ];
+        for npm_path in &common_npm_paths {
+            let path = Path::new(npm_path);
+            if path.is_file() {
+                if let Ok(output) = Command::new(&path).arg("--version").output() {
+                    if output.status.success() {
+                        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        tracing::info!("check_npm_version 找到 npm: {} v{}", npm_path, version);
+                        return Ok(EnvItem {
+                            name: "npm".to_string(),
+                            version: Some(version.clone()),
+                            status: EnvStatus::Success,
+                            message: format!("已安装 npm {} [系统]", version),
+                            required: false,
+                        });
+                    }
+                }
+            }
+        }
+        // 搜索 ~/.nvm/versions/node/*/bin/npm
+        if let Ok(home) = std::env::var("HOME") {
+            let nvm_dir = PathBuf::from(&home).join(".nvm").join("versions").join("node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
+                for entry in entries.flatten() {
+                    let npm_path = entry.path().join("bin").join("npm");
+                    if npm_path.is_file() {
+                        if let Ok(output) = Command::new(&npm_path).arg("--version").output() {
+                            if output.status.success() {
+                                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                tracing::info!("check_npm_version 找到 nvm npm: {} v{}", npm_path.display(), version);
+                                return Ok(EnvItem {
+                                    name: "npm".to_string(),
+                                    version: Some(version.clone()),
+                                    status: EnvStatus::Success,
+                                    message: format!("已安装 npm {} [nvm]", version),
+                                    required: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 第一优先：系统 PATH 中的 npm
     match try_npm_version_output(None) {
         Some(output) => {
@@ -220,6 +274,60 @@ pub async fn check_npm_version(
 #[tauri::command]
 pub async fn check_pnpm_installation() -> Result<EnvItem, String> {
     info!("检查 pnpm...");
+
+    // macOS GUI 进程的 PATH 可能不完整，额外检查常见路径
+    #[cfg(target_os = "macos")]
+    {
+        let common_pnpm_paths = [
+            "/usr/local/bin/pnpm",
+            "/opt/homebrew/bin/pnpm",
+            "/opt/homebrew/opt/pnpm/bin/pnpm",
+            "/opt/local/bin/pnpm",
+            "/usr/local/opt/pnpm/bin/pnpm",
+        ];
+        for pnpm_path in &common_pnpm_paths {
+            let path = Path::new(pnpm_path);
+            if path.is_file() {
+                if let Ok(output) = Command::new(&path).arg("--version").output() {
+                    if output.status.success() {
+                        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        tracing::info!("check_pnpm_installation 找到 pnpm: {} v{}", pnpm_path, version);
+                        return Ok(EnvItem {
+                            name: "pnpm".to_string(),
+                            version: Some(version.clone()),
+                            status: EnvStatus::Success,
+                            message: format!("已安装 pnpm {}", version),
+                            required: false,
+                        });
+                    }
+                }
+            }
+        }
+        // 搜索 ~/.nvm/versions/node/*/bin/pnpm
+        if let Ok(home) = std::env::var("HOME") {
+            let nvm_dir = PathBuf::from(&home).join(".nvm").join("versions").join("node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
+                for entry in entries.flatten() {
+                    let pnpm_path = entry.path().join("bin").join("pnpm");
+                    if pnpm_path.is_file() {
+                        if let Ok(output) = Command::new(&pnpm_path).arg("--version").output() {
+                            if output.status.success() {
+                                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                tracing::info!("check_pnpm_installation 找到 nvm pnpm: {} v{}", pnpm_path.display(), version);
+                                return Ok(EnvItem {
+                                    name: "pnpm".to_string(),
+                                    version: Some(version.clone()),
+                                    status: EnvStatus::Success,
+                                    message: format!("已安装 pnpm {}", version),
+                                    required: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let output = Command::new("pnpm")
         .arg("--version")
