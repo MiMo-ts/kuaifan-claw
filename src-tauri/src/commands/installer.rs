@@ -199,7 +199,7 @@ pub async fn install_node(
 
     #[cfg(target_os = "macos")]
     {
-        // macOS: 检测架构，使用 npmmirror 国内镜像下载
+        // macOS: 检测架构
         let is_arm64 = Command::new("uname")
             .arg("-m")
             .output()
@@ -207,44 +207,58 @@ pub async fn install_node(
             .unwrap_or(false);
 
         let arch = if is_arm64 { "arm64" } else { "x64" };
-        let tarball = format!("node-{}-darwin-{}.tar.gz", NODE_VERSION.trim_start_matches('v'), arch);
-        // 使用 npmmirror 国内镜像（参考 u-claw），速度快
-        let url = format!("https://npmmirror.com/mirrors/node/{}/{}", NODE_VERSION, tarball);
+        let tarball_name = format!("node-{}-darwin-{}.tar.gz", NODE_VERSION.trim_start_matches('v'), arch);
 
-        emit(
-            &app,
-            InstallProgressEvent::started("node", &format!("正在下载 Node.js {} macOS {} 版本（npmmirror 镜像）…", NODE_VERSION, arch)),
-        );
+        // 优先使用内置 tarball 包
+        let bundled_tarball = resolve_bundled_zip_from_project(&tarball_name)
+            .or_else(|| resolve_bundled_zip(&app, &tarball_name));
 
-        let temp_dir = std::env::temp_dir();
-        let tar_path = temp_dir.join(&tarball);
+        if let Some(tar_path) = bundled_tarball {
+            // 使用内置包
+            emit(
+                &app,
+                InstallProgressEvent::started("node", &format!("正在从内置包解压 Node.js {}（macOS {}，离线）…", NODE_VERSION, arch)),
+            );
+            info!("macOS Node 使用内置包: {}", tar_path.display());
+            tar_gz_extract(&tar_path, &dest).await?;
+        } else {
+            // 没有内置包，使用 npmmirror 下载
+            let url = format!("https://npmmirror.com/mirrors/node/{}/{}", NODE_VERSION, tarball_name);
+            emit(
+                &app,
+                InstallProgressEvent::started("node", &format!("正在下载 Node.js {} macOS {} 版本（npmmirror 镜像）…", NODE_VERSION, arch)),
+            );
 
-        let client = reqwest::Client::new();
-        let mut resp = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("下载失败: {}", e))?;
+            let temp_dir = std::env::temp_dir();
+            let tar_path = temp_dir.join(&tarball_name);
 
-        let mut file = tokio::fs::File::create(&tar_path)
-            .await
-            .map_err(|e| format!("创建文件失败: {}", e))?;
-        while let Some(chunk) = resp
-            .chunk()
-            .await
-            .map_err(|e| format!("读取流失败: {}", e))?
-        {
-            file.write_all(&chunk)
+            let client = reqwest::Client::new();
+            let mut resp = client
+                .get(&url)
+                .send()
                 .await
-                .map_err(|e| format!("写入失败: {}", e))?;
-        }
-        file.flush()
-            .await
-            .map_err(|e| format!("刷新文件失败: {}", e))?;
+                .map_err(|e| format!("下载失败: {}", e))?;
 
-        emit(&app, InstallProgressEvent::progress("node", 80.0, "正在解压…"));
-        tar_gz_extract(&tar_path, &dest).await?;
-        tokio::fs::remove_file(&tar_path).await.ok();
+            let mut file = tokio::fs::File::create(&tar_path)
+                .await
+                .map_err(|e| format!("创建文件失败: {}", e))?;
+            while let Some(chunk) = resp
+                .chunk()
+                .await
+                .map_err(|e| format!("读取流失败: {}", e))?
+            {
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| format!("写入失败: {}", e))?;
+            }
+            file.flush()
+                .await
+                .map_err(|e| format!("刷新文件失败: {}", e))?;
+
+            emit(&app, InstallProgressEvent::progress("node", 80.0, "正在解压…"));
+            tar_gz_extract(&tar_path, &dest).await?;
+            tokio::fs::remove_file(&tar_path).await.ok();
+        }
 
         let node_v = node_exe(&env_dir);
         let v_out = Command::new(&node_v)
