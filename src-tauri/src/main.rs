@@ -92,7 +92,23 @@ fn fallback_user_data_dir() -> PathBuf {
             .join("OpenClaw-CN Manager")
             .join("data")
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: ~/Library/Application Support/OpenClaw-CN Manager/data
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|h| h.join("Library").join("Application Support").join("OpenClaw-CN Manager").join("data"))
+            .unwrap_or_else(|| std::env::temp_dir().join("OpenClaw-CN-Manager-data"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: ~/.local/share/OpenClaw-CN Manager/data
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|h| h.join(".local/share/OpenClaw-CN Manager/data"))
+            .unwrap_or_else(|| std::env::temp_dir().join("OpenClaw-CN-Manager-data"))
+    }
+    #[cfg(target_os = "freebsd")]
     {
         std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -147,7 +163,30 @@ fn resolve_release_data_dir(exe_path: &std::path::Path) -> std::path::PathBuf {
             return PathBuf::from(t);
         }
     }
+
     let exe_dir = exe_path.parent().unwrap_or(exe_path);
+
+    // macOS app bundle 检测：exe 在 .app/Contents/MacOS/ 内
+    // data/config 应相对于 .app 根目录，而非 MacOS/ 子目录
+    #[cfg(target_os = "macos")]
+    {
+        let exe_str = exe_path.to_string_lossy();
+        if exe_str.contains(".app/Contents/MacOS/") {
+            // /Applications/快泛claw.app/Contents/MacOS/快泛claw → /Applications/快泛claw.app/
+            if let Some(app_bundle_pos) = exe_str.find(".app/") {
+                let app_bundle_path = &exe_str[..app_bundle_pos + 5]; // 包含 .app
+                let bundle_data_dir = PathBuf::from(app_bundle_path).join("data");
+                let bundle_config_dir = bundle_data_dir.join("config");
+                // 若安装时在 app bundle 内部创建了 data/config，优先使用
+                if bundle_config_dir.exists() {
+                    return bundle_data_dir;
+                }
+                // 否则使用 bundle 内部的默认 data 路径（后续 ensure_writable_release_data_dir 会检测可写性）
+                return bundle_data_dir;
+            }
+        }
+    }
+
     let portable_data_dir = exe_dir.join("data");
     let portable_config_dir = portable_data_dir.join("config");
     // 优先级 1：{exe_dir}/data/config 存在（安装程序 / MSI 均会预先创建）
@@ -256,16 +295,47 @@ fn msi_bootstrap(exe_path: &std::path::Path) {
     tracing::info!("MSI bootstrap 已在安装目录创建 data/config: {}", config_dir.display());
 }
 
+/// 解析资源目录路径，支持 macOS app bundle。
+/// Tauri 打包后资源位于：
+/// - Windows/Linux: {exe_dir}/resources/
+/// - macOS app bundle: {app_bundle}/Contents/Resources/
+fn resolve_resource_dir(exe_path: &std::path::Path) -> Option<PathBuf> {
+    let exe_str = exe_path.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS app bundle: /Applications/快泛claw.app/Contents/MacOS/快泛claw
+        if exe_str.contains(".app/Contents/MacOS/") {
+            if let Some(app_bundle_pos) = exe_str.find(".app/") {
+                let app_bundle_path = &exe_str[..app_bundle_pos + 5];
+                let resource_dir = PathBuf::from(app_bundle_path).join("Contents").join("Resources");
+                if resource_dir.exists() {
+                    return Some(resource_dir);
+                }
+            }
+        }
+    }
+
+    // 默认：exe 同级的 resources 目录
+    let default_resource = exe_path.parent()?.join("resources");
+    if default_resource.exists() {
+        return Some(default_resource);
+    }
+
+    None
+}
+
 /// 首次运行时把打包的 resources/data 内容迁移到实际 data_dir。
 /// 检测方式：在 data_dir/.migrated 写入资源包版本号，若文件不存在即执行迁移。
 /// 每次版本更新时 resources/data 内容由 build.rs 自动更新版本号（通过写入 .resource_version 文件）。
-fn migrate_resources_on_first_run(data_dir_abs: &PathBuf, _exe_path: &PathBuf) {
+fn migrate_resources_on_first_run(data_dir_abs: &PathBuf, exe_path: &PathBuf) {
     if !cfg!(debug_assertions) {
         // release 模式：尝试从资源目录迁移初始数据
-        if let Ok(resource_dir) = std::env::current_exe()
-            .map(|p| p.parent().unwrap_or(&p).to_path_buf())
-            .map(|p| p.join("resources").join("data"))
-        {
+
+        // 尝试解析资源目录：macOS app bundle 需要特殊处理
+        let resource_dir = resolve_resource_dir(exe_path).map(|p| p.join("data"));
+
+        if let Some(resource_dir) = resource_dir {
             let migrated_marker = data_dir_abs.join(".migrated");
             let resource_version_file = resource_dir.join(".resource_version");
 
