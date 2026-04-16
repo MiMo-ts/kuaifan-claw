@@ -1118,13 +1118,15 @@ fn find_node_executable() -> Option<PathBuf> {
         {
             return Some(p);
         }
-        // macOS GUI 应用 PATH 可能缺少 Homebrew，额外检查 Homebrew 路径
-        let homebrew_node_paths = [
-            "/opt/homebrew/bin/node",
+        // macOS GUI 应用 PATH 经常不完整，额外检查所有常见 Node.js 安装路径
+        let common_node_paths = [
+            "/usr/local/bin/node",           // 官网 pkg 安装
+            "/opt/homebrew/bin/node",        // Homebrew 安装
             "/opt/homebrew/opt/node/bin/node",
-            "/usr/local/bin/node",
+            "/opt/local/bin/node",            // MacPorts
+            "/usr/local/opt/node/bin/node",  // 常用备选
         ];
-        for p in &homebrew_node_paths {
+        for p in &common_node_paths {
             let path = Path::new(p);
             if path.is_file() {
                 if Command::new(p)
@@ -1133,8 +1135,28 @@ fn find_node_executable() -> Option<PathBuf> {
                     .map(|o| o.status.success())
                     .unwrap_or(false)
                 {
-                    tracing::info!("find_node_executable 找到 Homebrew Node: {}", p);
+                    tracing::info!("find_node_executable 找到 Node: {}", p);
                     return Some(PathBuf::from(p));
+                }
+            }
+        }
+        // 额外搜索：检查 ~/.nvm/versions/node/*/bin/node
+        if let Ok(home) = std::env::var("HOME") {
+            let nvm_dir = PathBuf::from(&home).join(".nvm").join("versions").join("node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
+                for entry in entries.flatten() {
+                    let node_path = entry.path().join("bin").join("node");
+                    if node_path.is_file() {
+                        if Command::new(&node_path)
+                            .arg("--version")
+                            .output()
+                            .map(|o| o.status.success())
+                            .unwrap_or(false)
+                        {
+                            tracing::info!("find_node_executable 找到 nvm Node: {}", node_path.display());
+                            return Some(node_path);
+                        }
+                    }
                 }
             }
         }
@@ -1197,16 +1219,31 @@ fn find_npm_cmd_full_path() -> Option<PathBuf> {
         {
             return Some(p);
         }
-        // macOS GUI 应用 PATH 可能缺少 Homebrew，额外检查 Homebrew 路径
-        let homebrew_npm_paths = [
-            "/opt/homebrew/bin/npm",
+        // macOS GUI 应用 PATH 经常不完整，额外检查所有常见 npm 安装路径
+        let common_npm_paths = [
+            "/usr/local/bin/npm",              // 官网 pkg 安装
+            "/opt/homebrew/bin/npm",          // Homebrew 安装
             "/opt/homebrew/opt/node/bin/npm",
-            "/usr/local/bin/npm",
+            "/opt/local/bin/npm",              // MacPorts
+            "/usr/local/opt/node/bin/npm",    // 常用备选
         ];
-        for p in &homebrew_npm_paths {
+        for p in &common_npm_paths {
             let path = Path::new(p);
             if path.is_file() {
                 return Some(PathBuf::from(p));
+            }
+        }
+        // 额外搜索：检查 ~/.nvm/versions/node/*/bin/npm
+        if let Ok(home) = std::env::var("HOME") {
+            let nvm_dir = PathBuf::from(&home).join(".nvm").join("versions").join("node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
+                for entry in entries.flatten() {
+                    let npm_path = entry.path().join("bin").join("npm");
+                    if npm_path.is_file() {
+                        tracing::info!("find_npm_cmd_full_path 找到 nvm npm: {}", npm_path.display());
+                        return Some(npm_path);
+                    }
+                }
             }
         }
         None
@@ -1269,16 +1306,31 @@ fn find_pnpm_executable() -> Option<PathBuf> {
         {
             return Some(p);
         }
-        // macOS GUI 应用 PATH 可能缺少 Homebrew，额外检查 Homebrew 路径
-        let homebrew_pnpm_paths = [
-            "/opt/homebrew/bin/pnpm",
+        // macOS GUI 应用 PATH 经常不完整，额外检查所有常见 pnpm 安装路径
+        let common_pnpm_paths = [
+            "/usr/local/bin/pnpm",              // 官网 pkg 安装
+            "/opt/homebrew/bin/pnpm",          // Homebrew 安装
             "/opt/homebrew/opt/pnpm/bin/pnpm",
-            "/usr/local/bin/pnpm",
+            "/opt/local/bin/pnpm",              // MacPorts
+            "/usr/local/opt/pnpm/bin/pnpm",    // 常用备选
         ];
-        for p in &homebrew_pnpm_paths {
+        for p in &common_pnpm_paths {
             let path = Path::new(p);
             if path.is_file() {
                 return Some(PathBuf::from(p));
+            }
+        }
+        // 额外搜索：检查 ~/.nvm/versions/node/*/bin/pnpm
+        if let Ok(home) = std::env::var("HOME") {
+            let nvm_dir = PathBuf::from(&home).join(".nvm").join("versions").join("node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
+                for entry in entries.flatten() {
+                    let pnpm_path = entry.path().join("bin").join("pnpm");
+                    if pnpm_path.is_file() {
+                        tracing::info!("find_pnpm_executable 找到 nvm pnpm: {}", pnpm_path.display());
+                        return Some(pnpm_path);
+                    }
+                }
             }
         }
         None
