@@ -1101,7 +1101,46 @@ fn find_node_executable() -> Option<PathBuf> {
         }
         None
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // 先尝试 which node（系统 PATH）
+        if let Some(p) = Command::new("which")
+            .arg("node")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .map(|l| PathBuf::from(l.trim()))
+            })
+        {
+            return Some(p);
+        }
+        // macOS GUI 应用 PATH 可能缺少 Homebrew，额外检查 Homebrew 路径
+        let homebrew_node_paths = [
+            "/opt/homebrew/bin/node",
+            "/opt/homebrew/opt/node/bin/node",
+            "/usr/local/bin/node",
+        ];
+        for p in &homebrew_node_paths {
+            let path = Path::new(p);
+            if path.is_file() {
+                if Command::new(p)
+                    .arg("--version")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
+                    tracing::info!("find_node_executable 找到 Homebrew Node: {}", p);
+                    return Some(PathBuf::from(p));
+                }
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "linux")]
     {
         Command::new("which")
             .arg("node")
@@ -1141,7 +1180,38 @@ fn find_npm_cmd_full_path() -> Option<PathBuf> {
         }
         None
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // 先尝试 which npm（系统 PATH）
+        if let Some(p) = Command::new("which")
+            .arg("npm")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .map(|l| PathBuf::from(l.trim()))
+            })
+        {
+            return Some(p);
+        }
+        // macOS GUI 应用 PATH 可能缺少 Homebrew，额外检查 Homebrew 路径
+        let homebrew_npm_paths = [
+            "/opt/homebrew/bin/npm",
+            "/opt/homebrew/opt/node/bin/npm",
+            "/usr/local/bin/npm",
+        ];
+        for p in &homebrew_npm_paths {
+            let path = Path::new(p);
+            if path.is_file() {
+                return Some(PathBuf::from(p));
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "linux")]
     {
         Command::new("which")
             .arg("npm")
@@ -1182,7 +1252,38 @@ fn find_pnpm_executable() -> Option<PathBuf> {
         }
         None
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // 先尝试 which pnpm（系统 PATH）
+        if let Some(p) = Command::new("which")
+            .arg("pnpm")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .map(|l| PathBuf::from(l.trim()))
+            })
+        {
+            return Some(p);
+        }
+        // macOS GUI 应用 PATH 可能缺少 Homebrew，额外检查 Homebrew 路径
+        let homebrew_pnpm_paths = [
+            "/opt/homebrew/bin/pnpm",
+            "/opt/homebrew/opt/pnpm/bin/pnpm",
+            "/usr/local/bin/pnpm",
+        ];
+        for p in &homebrew_pnpm_paths {
+            let path = Path::new(p);
+            if path.is_file() {
+                return Some(PathBuf::from(p));
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "linux")]
     {
         Command::new("which")
             .arg("pnpm")
