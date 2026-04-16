@@ -199,7 +199,7 @@ pub async fn install_node(
 
     #[cfg(target_os = "macos")]
     {
-        // macOS: 检测架构，下载对应版本
+        // macOS: 检测架构，使用 npmmirror 国内镜像下载
         let is_arm64 = Command::new("uname")
             .arg("-m")
             .output()
@@ -208,11 +208,12 @@ pub async fn install_node(
 
         let arch = if is_arm64 { "arm64" } else { "x64" };
         let tarball = format!("node-{}-darwin-{}.tar.gz", NODE_VERSION.trim_start_matches('v'), arch);
-        let url = format!("https://nodejs.org/dist/{}/{}", NODE_VERSION, tarball);
+        // 使用 npmmirror 国内镜像（参考 u-claw），速度快
+        let url = format!("https://npmmirror.com/mirrors/node/{}/{}", NODE_VERSION, tarball);
 
         emit(
             &app,
-            InstallProgressEvent::started("node", &format!("正在下载 Node.js {} macOS {} 版本…", NODE_VERSION, arch)),
+            InstallProgressEvent::started("node", &format!("正在下载 Node.js {} macOS {} 版本（npmmirror 镜像）…", NODE_VERSION, arch)),
         );
 
         let temp_dir = std::env::temp_dir();
@@ -268,11 +269,12 @@ pub async fn install_node(
             &app,
             InstallProgressEvent::started(
                 "node",
-                &format!("正在下载 Node.js {} Linux 版本…", NODE_VERSION),
+                &format!("正在下载 Node.js {} Linux 版本（npmmirror 镜像）…", NODE_VERSION),
             ),
         );
+        // 使用 npmmirror 国内镜像（参考 u-claw），速度快
         let url = format!(
-            "https://nodejs.org/dist/{}/{}",
+            "https://npmmirror.com/mirrors/node/{}/{}",
             NODE_VERSION, NODE_LINUX_TAR
         );
         let client = reqwest::Client::new();
