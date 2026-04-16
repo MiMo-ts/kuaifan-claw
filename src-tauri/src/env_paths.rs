@@ -173,6 +173,30 @@ pub fn resolve_node(data_dir: &str) -> (PathBuf, bool) {
         return (PathBuf::from("node"), true);
     }
 
+    // macOS Apple Silicon: 额外检查 Homebrew 安装路径（GUI 应用可能 PATH 不完整）
+    #[cfg(target_os = "macos")]
+    {
+        let homebrew_paths = [
+            "/opt/homebrew/bin/node",
+            "/opt/homebrew/opt/node/bin/node",
+            "/usr/local/bin/node", // Intel Mac 兜底
+        ];
+        for p in &homebrew_paths {
+            let node_path = Path::new(p);
+            if node_path.is_file() {
+                if Command::new(p)
+                    .arg("--version")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
+                    tracing::info!("找到 Homebrew Node.js: {}", p);
+                    return (PathBuf::from(p), true);
+                }
+            }
+        }
+    }
+
     // 第二优先：内置 node（data/env/node）
     let env_dir = env_root(data_dir);
     let bundled_path = node_exe(&env_dir);
@@ -214,6 +238,30 @@ pub fn resolve_git(data_dir: &str) -> (PathBuf, bool) {
         .unwrap_or(false)
     {
         return (PathBuf::from("git"), true);
+    }
+
+    // macOS Apple Silicon: 额外检查 Homebrew 安装路径（GUI 应用可能 PATH 不完整）
+    #[cfg(target_os = "macos")]
+    {
+        let homebrew_git_paths = [
+            "/opt/homebrew/bin/git",
+            "/opt/homebrew/opt/git/bin/git",
+            "/usr/local/bin/git", // Intel Mac 兜底
+        ];
+        for p in &homebrew_git_paths {
+            let git_path = Path::new(p);
+            if git_path.is_file() {
+                if Command::new(p)
+                    .arg("--version")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
+                    tracing::info!("找到 Homebrew Git: {}", p);
+                    return (PathBuf::from(p), true);
+                }
+            }
+        }
     }
 
     // 第二优先：内置 git（data/env/git）
