@@ -23,7 +23,7 @@ pub fn parse_openclaw_config(data_dir: &str) -> (String, String, String, bool, b
 
     let mut package = "openclaw-cn".to_string();
     let mut version_tag = "latest".to_string();
-    let mut registry = String::new();
+    let mut registry = "https://registry.npmmirror.com".to_string(); // 默认使用国内镜像
     let mut allow_scripts = true;
     let mut prefer_system_node = false;
     let mut legacy_peer_deps = true;
