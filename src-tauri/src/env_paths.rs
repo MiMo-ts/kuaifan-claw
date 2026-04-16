@@ -289,14 +289,22 @@ pub fn build_deps_env_path(data_dir: &str) -> String {
     let system_path = std::env::var("PATH").unwrap_or_default();
 
     let Some(node_root) = resolve_node_bin_dir_for_path(data_dir) else {
-        // 系统 PATH 的 node，但在 macOS 上需要添加 Homebrew 路径（GUI 应用 PATH 可能不完整）
+        // 系统 PATH 的 node，但 macOS GUI 应用 PATH 可能不完整，需要确保常见路径存在
         #[cfg(target_os = "macos")]
         {
-            let homebrew_bin = "/opt/homebrew/bin";
-            let intel_bin = "/usr/local/bin";
-            if !system_path.contains(homebrew_bin) && Path::new(homebrew_bin).is_dir() {
-                return format!("{}:{}:{}", homebrew_bin, intel_bin, system_path);
+            let mut prepend = String::new();
+            // 无论是否有 Homebrew，都要确保 /usr/local/bin 在 PATH 中（官网 pkg 安装的 node）
+            if !system_path.contains("/usr/local/bin") {
+                prepend = format!("{}:", "/usr/local/bin");
             }
+            // Homebrew 路径也要添加
+            if !system_path.contains("/opt/homebrew/bin") && Path::new("/opt/homebrew/bin").is_dir() {
+                prepend.push_str("/opt/homebrew/bin:");
+            }
+            if prepend.is_empty() {
+                return system_path;
+            }
+            return format!("{}{}", prepend, system_path);
         }
         return system_path;
     };
@@ -314,11 +322,13 @@ pub fn build_deps_env_path(data_dir: &str) -> String {
 
     #[cfg(target_os = "macos")]
     {
-        // macOS 上确保 Homebrew bin 目录在 PATH 前
-        let homebrew_bin = "/opt/homebrew/bin";
-        let intel_bin = "/usr/local/bin";
-        if !prepend.contains(homebrew_bin) && Path::new(homebrew_bin).is_dir() {
-            prepend = format!("{}:{}:{}", homebrew_bin, intel_bin, prepend);
+        // macOS 上确保 /usr/local/bin 在 PATH 前（官网 pkg 安装）
+        if !prepend.contains("/usr/local/bin") {
+            prepend = format!("{}:{}", "/usr/local/bin", prepend);
+        }
+        // Homebrew 路径也要添加
+        if !prepend.contains("/opt/homebrew/bin") && Path::new("/opt/homebrew/bin").is_dir() {
+            prepend.push_str("/opt/homebrew/bin:");
         }
         return format!("{}:{}", prepend, system_path);
     }
