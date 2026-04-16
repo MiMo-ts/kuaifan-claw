@@ -289,7 +289,15 @@ pub fn build_deps_env_path(data_dir: &str) -> String {
     let system_path = std::env::var("PATH").unwrap_or_default();
 
     let Some(node_root) = resolve_node_bin_dir_for_path(data_dir) else {
-        // 系统 PATH 的 node，无需修改 PATH
+        // 系统 PATH 的 node，但在 macOS 上需要添加 Homebrew 路径（GUI 应用 PATH 可能不完整）
+        #[cfg(target_os = "macos")]
+        {
+            let homebrew_bin = "/opt/homebrew/bin";
+            let intel_bin = "/usr/local/bin";
+            if !system_path.contains(homebrew_bin) && Path::new(homebrew_bin).is_dir() {
+                return format!("{}:{}:{}", homebrew_bin, intel_bin, system_path);
+            }
+        }
         return system_path;
     };
 
@@ -302,6 +310,17 @@ pub fn build_deps_env_path(data_dir: &str) -> String {
         if git_cmd_dir.is_dir() {
             prepend = format!("{};{}", git_cmd_dir.to_string_lossy(), prepend);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 上确保 Homebrew bin 目录在 PATH 前
+        let homebrew_bin = "/opt/homebrew/bin";
+        let intel_bin = "/usr/local/bin";
+        if !prepend.contains(homebrew_bin) && Path::new(homebrew_bin).is_dir() {
+            prepend = format!("{}:{}:{}", homebrew_bin, intel_bin, prepend);
+        }
+        return format!("{}:{}", prepend, system_path);
     }
 
     format!("{};{}", prepend, system_path)
