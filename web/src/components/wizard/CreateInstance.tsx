@@ -152,10 +152,6 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
 
   const handleCreate = async () => {
     setCreateError(null);
-    if (!activeRobot?.id) {
-      setCreateError('请先在「机器人商店」中点击「选择此机器人」，再回到本页创建实例。');
-      return;
-    }
     if (!selectedChannel) {
       setCreateError('未选择聊天通道，请使用「上一步」回到第 2 步选择通道。');
       return;
@@ -197,7 +193,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
         : null;
       await invoke('create_instance', {
         name: trimmedName,
-        robotId: activeRobot.id,
+        robotId: activeRobot?.id ?? null,
         channelType: selectedChannel,
         channelConfig,
         modelConfig,
@@ -292,10 +288,10 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
           </div>
         ) : (
         <>
-        {/* ── 步骤 1：选机器人 ── */}
+        {/* ── 步骤 1：选机器人（可选）── */}
         {step === 1 && (
           <div className="space-y-4">
-            <h3 className="text-lg font-medium text-gray-900">已选择的机器人</h3>
+            <h3 className="text-lg font-medium text-gray-900">已选择的机器人 <span className="text-sm font-normal text-gray-500">（可选）</span></h3>
             {activeRobot && (
               <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                 <div className="flex items-center">
@@ -320,9 +316,18 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
               </div>
             )}
             {!activeRobot && (
-              <p className="text-sm text-amber-600 text-center">
-                请先在「机器人商店」中选择机器人，或点击下方返回上一向导步骤
-              </p>
+              <div className="p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300 text-center">
+                <p className="text-sm text-gray-500 mb-2">
+                  未选择机器人，将使用通用人设 + openclaw 默认 skills
+                </p>
+                <button
+                  type="button"
+                  onClick={onPrev}
+                  className="text-sm text-blue-600 hover:text-blue-800 underline"
+                >
+                  返回机器人商店选择机器人
+                </button>
+              </div>
             )}
 
             {localRobots.length > 0 && (
@@ -362,18 +367,10 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
             <div className="flex gap-3 pt-2">
               <button
                 type="button"
-                onClick={onPrev}
-                className="flex-1 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-              >
-                返回机器人商店
-              </button>
-              <button
-                type="button"
                 onClick={() => setStep(2)}
-                disabled={!activeRobot}
-                className="flex-1 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
               >
-                下一步：选择聊天通道
+                {activeRobot ? '下一步：选择聊天通道' : '下一步：选择聊天通道（通用人设）'}
               </button>
             </div>
           </div>
@@ -949,7 +946,7 @@ groupPolicy 为 allowlist 时生效"
             <div className="bg-gray-50 rounded-lg p-4 space-y-2">
               <div className="flex justify-between">
                 <span className="text-gray-500">机器人</span>
-                <span className="font-medium">{activeRobot?.name || selectedRobot?.name}</span>
+                <span className="font-medium">{activeRobot?.name || selectedRobot?.name || '未选择（使用通用人设）'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">聊天通道</span>
@@ -996,7 +993,7 @@ groupPolicy 为 allowlist 时生效"
                 value={instanceName}
                 onChange={e => setInstanceName(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                placeholder={`${CHANNELS.find(c => c.id === selectedChannel)?.name}-${activeRobot?.name}-01`}
+                placeholder={`${CHANNELS.find(c => c.id === selectedChannel)?.name}-${activeRobot?.name || '通用人设'}-01`}
               />
             </div>
             {createError && (

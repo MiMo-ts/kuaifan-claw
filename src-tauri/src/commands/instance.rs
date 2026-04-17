@@ -11,7 +11,9 @@ use tracing::{info, warn};
 fn count_robot_refs(instances: &[Instance]) -> HashMap<String, usize> {
     let mut refs: HashMap<String, usize> = HashMap::new();
     for inst in instances {
-        *refs.entry(inst.robot_id.clone()).or_insert(0) += 1;
+        if let Some(ref robot_id) = inst.robot_id {
+            *refs.entry(robot_id.clone()).or_insert(0) += 1;
+        }
     }
     refs
 }
@@ -337,7 +339,7 @@ pub async fn get_instance(
 pub async fn create_instance(
     data_dir: tauri::State<'_, crate::AppState>,
     name: String,
-    robot_id: String,
+    robot_id: Option<String>,
     channel_type: String,
     channel_config: serde_json::Value,
     model_config: Option<ModelConfig>,
@@ -510,7 +512,7 @@ pub async fn delete_instance(
         .instances
         .iter()
         .find(|i| i.id == instance_id)
-        .map(|i| i.robot_id.clone());
+        .and_then(|i| i.robot_id.clone());
 
     let n_before = doc.instances.len();
     let mut doc = doc;

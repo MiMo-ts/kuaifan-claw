@@ -156,7 +156,9 @@ pub struct Instance {
     pub id: String,
     pub name: String,
     pub enabled: bool,
-    pub robot_id: String,
+    /// 绑定的机器人 ID，不选机器人时为 None（使用通用人设 + openclaw skills）
+    #[serde(default)]
+    pub robot_id: Option<String>,
     pub channel_type: String,
     pub channel_config: serde_json::Value,
     pub model: Option<ModelConfig>,
