@@ -29,23 +29,21 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Returns the platform-specific bundled file name and minimum size.
-/// On macOS we use .tar.gz instead of .zip; the file is downloaded by
-/// download-bundles.sh before the build starts.
-fn bundled_node_filename() -> (&'static str, u64) {
+/// macOS: None (Node.js 从 npmmirror 下载，不打包内置包以节省体积)
+/// Windows: node-v22.14.0-win-x64.zip
+/// Linux: node-v22.14.0-linux-x64.tar.gz
+fn bundled_node_filename() -> Option<(&'static str, u64)> {
     #[cfg(target_os = "macos")]
     {
-        #[cfg(target_arch = "aarch64")]
-        return ("node-v22.14.0-darwin-arm64.tar.gz", 5 * 1024 * 1024);
-        #[cfg(target_arch = "x86_64")]
-        return ("node-v22.14.0-darwin-x64.tar.gz", 5 * 1024 * 1024);
+        None
     }
     #[cfg(target_os = "windows")]
     {
-        ("node-v22.14.0-win-x64.zip", 5 * 1024 * 1024)
+        Some(("node-v22.14.0-win-x64.zip", 5 * 1024 * 1024))
     }
     #[cfg(target_os = "linux")]
     {
-        ("node-v22.14.0-linux-x64.tar.gz", 5 * 1024 * 1024)
+        Some(("node-v22.14.0-linux-x64.tar.gz", 5 * 1024 * 1024))
     }
 }
 
@@ -172,17 +170,22 @@ fn main() {
         let mut missing_files: Vec<String> = Vec::new();
 
         // 2a. Build the actual bundle list with platform-specific filenames
-        let (node_file, node_min) = bundled_node_filename();
+        // macOS: Node.js 从 npmmirror 下载，不打包内置包
+        let node_bundle = bundled_node_filename();
         let mingit = bundled_mingit_filename();
 
-        let actual_bundles: Vec<(&str, u64, &str)> = std::iter::once((node_file, node_min, "Node.js 离线包"))
-            .chain(mingit.map(|(f, s)| (f, s, "MinGit 离线包")))
-            .chain(std::iter::once((
-                "bundled-openclaw/openclaw-cn.tgz",
-                1024 * 1024,
-                "openclaw-cn npm 包 (openclaw-cn.tgz)",
-            )))
-            .collect();
+        let mut actual_bundles: Vec<(&str, u64, &str)> = Vec::new();
+        if let Some((file, min)) = node_bundle {
+            actual_bundles.push((file, min, "Node.js 离线包"));
+        }
+        if let Some((file, min)) = mingit {
+            actual_bundles.push((file, min, "MinGit 离线包"));
+        }
+        actual_bundles.push((
+            "bundled-openclaw/openclaw-cn.tgz",
+            1024 * 1024,
+            "openclaw-cn npm 包 (openclaw-cn.tgz)",
+        ));
 
         for (rel_path, min_bytes, desc) in actual_bundles {
             let full = md.join(rel_path);

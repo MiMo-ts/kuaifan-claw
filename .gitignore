@@ -55,9 +55,6 @@ pnpm-debug.log*
 *.zip
 *.tar.bz2
 
-# macOS 内置 Node.js 包（需打包进应用）
-!src-tauri/bundled-env/node-v22.14.0-darwin-*.tar.gz
-
 # Project-level node_modules (e.g. root-level tooling)
 node_modules/
 package-lock.json
