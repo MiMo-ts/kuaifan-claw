@@ -13,7 +13,7 @@
 //! |-------------------------------------|-----------|-------------|
 //! | `bundled-env/node-v22.14.0-win-x64.zip`  | 5 MB     | Node.js 离线包 |
 //! | `bundled-env/MinGit-2.53.0-64-bit.zip`  | 400 KB   | MinGit 离线包  |
-//! | `bundled-openclaw/openclaw-cn.tgz`       | 1 MB     | openclaw-cn npm 包 |
+//! | `bundled-openclaw/openclaw-cn.zip`        | 1 MB     | openclaw-cn npm 包 |
 //! | `resources/data/config/app.yaml`         | >0 B     | 应用配置模板    |
 //! | `resources/data/config/instances.yaml`   | >0 B     | 实例配置模板    |
 //! | `resources/data/config/models.yaml`      | >0 B     | 模型配置模板    |
@@ -182,9 +182,9 @@ fn main() {
             actual_bundles.push((file, min, "MinGit 离线包"));
         }
         actual_bundles.push((
-            "bundled-openclaw/openclaw-cn.tgz",
+            "bundled-openclaw/openclaw-cn.zip",
             1024 * 1024,
-            "openclaw-cn npm 包 (openclaw-cn.tgz)",
+            "openclaw-cn npm 包 (openclaw-cn.zip)",
         ));
 
         for (rel_path, min_bytes, desc) in actual_bundles {

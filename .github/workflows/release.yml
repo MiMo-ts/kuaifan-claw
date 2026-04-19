@@ -110,12 +110,12 @@ jobs:
               }
             }
           } | ConvertTo-Json -Depth 3
-          $json | Out-File -FilePath "update-$version.json" -Encoding UTF8
+          $json | Out-File -FilePath "update.json" -Encoding UTF8
 
       - name: Upload update JSON
         uses: softprops/action-gh-release@v2
         with:
           tag: ${{ github.ref_name }}
-          files: update-*.json
+          files: update.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

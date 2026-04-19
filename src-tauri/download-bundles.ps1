@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     下载 OpenClaw-CN Manager 所有内置资源（离线包）。
@@ -9,7 +9,7 @@
     下载内容：
       bundled-env/node-v22.14.0-win-x64.zip       Node.js 离线包
       bundled-env/MinGit-2.53.0-64-bit.zip        MinGit 离线包
-      bundled-openclaw/openclaw-cn.tgz             openclaw-cn npm 包（npm pack）
+      bundled-openclaw/openclaw-cn.zip             openclaw-cn npm 包（npm pack → zip）
       resources/plugins/wxwork.tgz                企业微信插件
       resources/plugins/qq.tgz                    QQ 插件
       resources/plugins/wechat_clawbot.tgz        微信插件
@@ -153,18 +153,23 @@ function Download-File($url, $dest, $label, $minBytes) {
 
 # ───────────────────────────────────────────────────────────────────────────
 # Npm-Pack($pkg, $dest, $label, $minBytes)
-#   用 npm pack 下载 npm 包到 dest，支持多 registry 回退
+#   用 npm pack 下载 npm 包到 dest，转换为 .zip 格式（Windows 兼容）
 # ───────────────────────────────────────────────────────────────────────────
 function Npm-Pack($pkg, $dest, $label, $minBytes) {
-    if ((-not $Force) -and (File-Sufficient $dest $minBytes)) {
-        $size = Format-Size (Get-Item $dest).Length
+    # .tgz 改 .zip
+    $zipDest = $dest -replace '\.tgz$', '.zip'
+
+    if ((-not $Force) -and (File-Sufficient $zipDest $minBytes)) {
+        $size = Format-Size (Get-Item $zipDest).Length
         Skip "$label 已就绪 ($size)"
         return
     }
-    Ensure-Dir $dest
+    Ensure-Dir $zipDest
 
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-pack-$(Get-Random)"
+    $extractDir = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-extract-$(Get-Random)"
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
 
     $registries = @(
         "https://registry.npmmirror.com",
@@ -198,8 +203,34 @@ function Npm-Pack($pkg, $dest, $label, $minBytes) {
                 continue
             }
 
-            Move-Item $tgz.FullName $dest -Force
-            $size = Format-Size (Get-Item $dest).Length
+            # 解压 tgz（tar.gz）到 extractDir
+            Info "解压 $label..."
+            tar -xzf $tgz.FullName -C $extractDir
+            if ($LASTEXITCODE -ne 0) {
+                Info "tar 解压失败，尝试下一个 registry"
+                continue
+            }
+
+            # 获取解压后的包目录（npm pack 会产出一个 package-name-version 目录）
+            $packageDirs = Get-ChildItem $extractDir -Directory
+            if (-not $packageDirs) {
+                Info "解压后未找到包目录，尝试下一个 registry"
+                continue
+            }
+            $packageDir = $packageDirs[0].FullName
+
+            # 用 PowerShell Compress-Archive 压缩为 .zip
+            Info "压缩为 zip..."
+            if (Test-Path $zipDest) {
+                Remove-Item $zipDest -Force
+            }
+            Compress-Archive -Path "$packageDir\*" -DestinationPath $zipDest -CompressionLevel Optimal
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipDest)) {
+                Info "zip 压缩失败，尝试下一个 registry"
+                continue
+            }
+
+            $size = Format-Size (Get-Item $zipDest).Length
             Ok "$label 下载完成 ($size) ← $reg"
             $done = $true
             break
@@ -210,6 +241,7 @@ function Npm-Pack($pkg, $dest, $label, $minBytes) {
     }
 
     Remove-Item $tmpDir -Recurse -Force -EA SilentlyContinue
+    Remove-Item $extractDir -Recurse -Force -EA SilentlyContinue
 
     if (-not $done) {
         Fail "$label 下载失败（所有 npm registry 均不可达）"
@@ -268,7 +300,7 @@ if (-not $PluginsOnly) {
         Write-Host "        请安装 Node.js 后重新运行本脚本。" -ForegroundColor Yellow
         Fail "npm 不可用"
     }
-    $ocDest = Join-Path $SrcTauri "bundled-openclaw\openclaw-cn.tgz"
+    $ocDest = Join-Path $SrcTauri "bundled-openclaw\openclaw-cn.zip"
     Npm-Pack "openclaw-cn" $ocDest "openclaw-cn" (1MB)
 }
 
