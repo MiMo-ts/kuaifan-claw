@@ -35,6 +35,17 @@ jobs:
       # 捆绑文件已存在于 git 仓库，跳过下载步骤
       # (如需更新内置资源，在本地运行 src-tauri/download-bundles.ps1 后提交)
 
+      - name: Copy bundled files to root
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          Copy-Item -Path "bundled-env/node-v22.14.0-win-x64.zip" -Destination "." -Force
+          Copy-Item -Path "bundled-env/MinGit-2.53.0-64-bit.zip" -Destination "." -Force
+          Copy-Item -Path "bundled-openclaw/openclaw-cn.zip" -Destination "." -Force -ErrorAction SilentlyContinue
+          if (Test-Path "bundled-openclaw/openclaw-cn.tgz") {
+            Copy-Item -Path "bundled-openclaw/openclaw-cn.tgz" -Destination "." -Force
+          }
+
       - name: Install frontend dependencies
         working-directory: web
         run: npm ci
