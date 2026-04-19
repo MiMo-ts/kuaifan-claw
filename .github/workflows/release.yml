@@ -49,7 +49,7 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           releaseName: "快泛claw ${{ github.ref_name }}"
-          args: --build --bundles nsis
+          args: --bundles nsis
 
       - name: Generate checksums
         shell: pwsh
