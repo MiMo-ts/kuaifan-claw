@@ -63,7 +63,7 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           releaseName: "快泛claw ${{ github.ref_name }}"
-          args: --bundles nsis
+          args: --bundles nsis --skip-signing
 
       - name: Generate checksums
         shell: pwsh
