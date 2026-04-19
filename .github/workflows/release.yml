@@ -32,6 +32,14 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      - name: Download bundled resources
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          if (Test-Path ./download-bundles.ps1) {
+            pwsh -File ./download-bundles.ps1
+          }
+
       - name: Install frontend dependencies
         working-directory: web
         run: npm ci
