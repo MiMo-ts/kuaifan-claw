@@ -4,9 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import {
   Settings, FolderOpen, Database, RefreshCw, Play, Square,
-  ChevronRight, Plus, Bot, Plug, BarChart3, ArrowLeft, Monitor, Loader2,
+  ChevronRight, Plus, Bot, Plug, BarChart3, ArrowLeft, Monitor, Loader2, Download,
 } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
+import { checkForUpdate, downloadAndInstallUpdate, UpdateProgress } from '../utils/updater';
 
 interface GatewayStatus {
   running: boolean;
@@ -37,6 +38,12 @@ export default function HomePage() {
   const [defaultModel, setDefaultModel] = useState<{provider?: string; model_name?: string} | null>(null);
   /** 启动/停止网关进行中，避免重复点击并配合 Toast 提示 */
   const [gatewayBusy, setGatewayBusy] = useState(false);
+  /** 更新状态 */
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateVersion, setUpdateVersion] = useState('');
+  const [updateNotes, setUpdateNotes] = useState('');
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
     if (useAppStore.persist.hasHydrated()) {
@@ -83,6 +90,42 @@ export default function HomePage() {
       document.removeEventListener('visibilitychange', onVis);
     };
   }, [hydrated, wizardCompleted, gatewayBusy]);
+
+  /** 检查更新 */
+  useEffect(() => {
+    if (!hydrated) return;
+    const doCheck = async () => {
+      try {
+        const info = await checkForUpdate();
+        if (info.available) {
+          setUpdateAvailable(true);
+          setUpdateVersion(info.version || '');
+          setUpdateNotes(info.body || '');
+        }
+      } catch {
+        /* 忽略更新检查失败 */
+      }
+    };
+    // 启动 3 秒后检查一次，不阻塞主流程
+    const t = window.setTimeout(doCheck, 3000);
+    return () => window.clearTimeout(t);
+  }, [hydrated]);
+
+  /** 触发更新下载 */
+  const handleUpdate = async () => {
+    if (isUpdating) return;
+    setIsUpdating(true);
+    try {
+      await downloadAndInstallUpdate((progress) => {
+        setUpdateProgress(progress);
+      });
+      // relaunch 后应用会重启，这里不需要做其他处理
+    } catch (e) {
+      toast.error(`更新失败: ${e}`);
+      setIsUpdating(false);
+      setUpdateProgress(null);
+    }
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -212,6 +255,52 @@ export default function HomePage() {
         </div>
       </header>
 
+      {/* Update available banner */}
+      {updateAvailable && (
+        <div className="bg-blue-50 border-b border-blue-200">
+          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+                <Download className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <div className="text-sm font-medium text-blue-900">
+                  发现新版本 v{updateVersion}
+                </div>
+                {updateNotes && (
+                  <div className="text-xs text-blue-700 mt-0.5 line-clamp-1">{updateNotes}</div>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {isUpdating && updateProgress && (
+                <div className="text-xs text-blue-700">
+                  下载中 {updateProgress.percentage}%
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={handleUpdate}
+                disabled={isUpdating}
+                className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                {isUpdating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    更新中…
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    更新
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-6 py-8">
         {/* Gateway status banner — always visible, color-coded */}
@@ -340,8 +429,8 @@ export default function HomePage() {
               action: 'open_openclaw_config', color: 'bg-gray-500',
             },
             {
-              icon: FolderOpen, label: '管理端配置', path: dataDir ? `${dataDir}/config` : null,
-              action: 'open_folder', color: 'bg-gray-400',
+              icon: FolderOpen, label: '管理端配置', path: null,
+              action: 'open_manager_config_dir', color: 'bg-gray-400',
             },
             { icon: Database, label: '备份恢复', path: '/backup', color: 'bg-indigo-500' },
             { icon: BarChart3, label: 'Token用量', path: '/usage', color: 'bg-green-500' },
@@ -357,9 +446,9 @@ export default function HomePage() {
                       toast.error(String(e));
                       console.error(e);
                     });
-                } else if (item.action === 'open_folder' && item.path) {
-                  invoke('open_folder', { path: item.path })
-                    .then(() => toast.success('已打开文件夹'))
+                } else if (item.action === 'open_manager_config_dir') {
+                  invoke<string>('open_manager_config_dir')
+                    .then((msg) => toast.success(msg || '已打开管理端配置目录'))
                     .catch((e) => {
                       toast.error(String(e));
                       console.error(e);

@@ -9,10 +9,11 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev -- --no-default-features",
-    "tauri:build": "tauri build"
+    "tauri:build": "cd ../src-tauri && node ../web/node_modules/@tauri-apps/cli/tauri.js build"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.9",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "ansi-to-html": "^0.7.2",
     "axios": "^1.7.7",
     "clsx": "^2.1.1",
@@ -30,7 +31,7 @@
     "@tauri-apps/cli": "^2.1.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-fs": "^2.0.0",
-    "@tauri-apps/plugin-process": "^2.0.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.0.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

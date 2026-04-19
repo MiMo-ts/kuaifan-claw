@@ -569,6 +569,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             data_dir: Mutex::new(data_dir_for_state),
         })
@@ -638,6 +639,7 @@ fn main() {
             commands::log::read_runtime_logs_tail,
             commands::log::clear_openclaw_gateway_log,
             commands::system::open_folder,
+            commands::system::open_manager_config_dir,
             commands::system::open_url,
             commands::system::open_openclaw_config,
             commands::system::get_system_info,
