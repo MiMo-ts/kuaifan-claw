@@ -53,6 +53,7 @@ pnpm-debug.log*
 *.snap
 *.flatpak
 *.zip
+!src-tauri/bundled-openclaw/openclaw-cn.zip
 *.tar.bz2
 
 # Project-level node_modules (e.g. root-level tooling)
