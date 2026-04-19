@@ -1,5 +1,6 @@
 // 网关控制命令 — 启动真实的 openclaw-cn `gateway` 子命令，并把管理端配置写入安装目录下的 openclaw.json
 
+use crate::commands::hidden_cmd;
 use crate::commands::log::OPENCLAW_GATEWAY_LOG;
 use crate::commands::robot::get_robot_system_prompt;
 use crate::env_paths::{resolve_node, resolve_git};
@@ -7,8 +8,6 @@ use crate::models::GatewayStatus;
 use crate::services::cipher::{decrypt_credential, CIPHER_PREFIX};
 use serde_json::json;
 use std::collections::HashSet;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::io::Write;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
@@ -2128,12 +2127,16 @@ fn manager_provider_catalog(provider_id: &str) -> Option<&'static [ProviderCatal
 fn openclaw_builtin_model_ids(provider_id: &str) -> std::collections::HashSet<&'static str> {
     match provider_id {
         "minimax" => [
+            "MiniMax-M2.7",
+            "MiniMax-M2.7-highspeed",
             "MiniMax-M2.5",
             "MiniMax-M2.5-highspeed",
             "MiniMax-M2.1",
             "MiniMax-M2.1-highspeed",
             "MiniMax-M2",
             "MiniMax-VL-01",
+            "MiniMax-M2-her",
+            "abab6.5s-chat",
         ]
         .into_iter()
         .collect(),
@@ -2365,7 +2368,7 @@ fn kill_windows_processes_listening_on_port(port: u16) {
          ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}",
         port
     );
-    let out = Command::new("powershell")
+    let out = hidden_cmd::powershell()
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
         .output();
     if let Ok(o) = &out {
@@ -2382,7 +2385,7 @@ fn kill_windows_processes_listening_on_port(port: u16) {
 /// Windows：`Get-NetTCPConnection` 在部分环境不可用或拿不到 OwningProcess 时，用 netstat 解析 PID 再 taskkill。
 #[cfg(windows)]
 fn kill_windows_processes_listening_on_port_netstat_fallback(port: u16) {
-    let out = Command::new("cmd")
+    let out = hidden_cmd::cmd()
         .args(["/C", &format!("netstat -ano | findstr :{}", port)])
         .output();
     let Ok(o) = out else {
@@ -2407,7 +2410,7 @@ fn kill_windows_processes_listening_on_port_netstat_fallback(port: u16) {
         }
     }
     for pid in pids {
-        let _ = Command::new("cmd")
+        let _ = hidden_cmd::cmd()
             .args(["/C", &format!("taskkill /PID {} /F /T", pid)])
             .output();
     }
@@ -2527,7 +2530,7 @@ fn stop_gateway_processes_best_effort(data_dir: &str) {
             if let Ok(pid) = pid_str.trim().parse::<u32>() {
                 #[cfg(windows)]
                 {
-                    let out = Command::new("cmd")
+                    let out = hidden_cmd::cmd()
                         .args(["/C", &format!("taskkill /PID {} /F /T", pid)])
                         .output();
                     match out {
@@ -2902,7 +2905,7 @@ fn spawn_gateway_process(
             format!("{}{}{}", git_prepend, node_parent, system_path)
         };
 
-        let mut cmd = Command::new(&node_exe);
+        let mut cmd = hidden_cmd::hidden_command(&node_exe);
         let gw_http_port = resolve_gateway_http_port(data_dir);
         cmd.args(["dist/entry.js", "gateway"])
             .current_dir(openclaw_dir)

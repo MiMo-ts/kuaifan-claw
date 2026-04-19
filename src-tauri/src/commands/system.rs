@@ -1,15 +1,14 @@
 // 系统命令
 
+use crate::commands::hidden_cmd;
 use crate::models::SystemInfo;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 /// 在系统默认浏览器中打开 URL（供其他模块复用，避免重复平台分支）
 pub(crate) fn open_url_in_default_browser(url: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
-        Command::new("cmd")
+        hidden_cmd::cmd()
             .args(["/C", "start", "", url])
             .spawn()
             .map_err(|e| format!("打开链接失败: {}", e))?;
@@ -58,6 +57,44 @@ pub async fn open_folder(path: String) -> Result<String, String> {
     Ok(format!("已打开: {}", path))
 }
 
+/// 打开管理端配置目录（data/config）
+#[tauri::command]
+pub async fn open_manager_config_dir(
+    data_dir: tauri::State<'_, crate::AppState>,
+) -> Result<String, String> {
+    let data_dir = data_dir.inner().data_dir.lock().unwrap().clone();
+    let config_path = std::path::PathBuf::from(&data_dir).join("config");
+
+    // 确保目录存在
+    tokio::fs::create_dir_all(&config_path)
+        .await
+        .map_err(|e| format!("创建配置目录失败: {}", e))?;
+
+    #[cfg(windows)]
+    {
+        // 使用 cmd /c start 打开目录更可靠
+        hidden_cmd::cmd()
+            .args(["/C", "start", "", &config_path.display().to_string()])
+            .spawn()
+            .map_err(|e| format!("打开文件夹失败: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&config_path)
+            .spawn()
+            .map_err(|e| format!("打开文件夹失败: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&config_path)
+            .spawn()
+            .map_err(|e| format!("打开文件夹失败: {}", e))?;
+    }
+    Ok(format!("已打开: {}", config_path.display()))
+}
+
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<String, String> {
     open_url_in_default_browser(&url)?;
@@ -91,7 +128,7 @@ pub async fn open_openclaw_config(
     // 用默认程序打开文件（Windows: start；macOS: open；Linux: xdg-open）
     #[cfg(windows)]
     {
-        Command::new("cmd")
+        hidden_cmd::cmd()
             .args(["/C", "start", "", &config_path])
             .spawn()
             .map_err(|e| format!("打开文件失败: {}", e))?;
@@ -122,7 +159,7 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
 
     #[cfg(windows)]
     {
-        let output = Command::new("cmd")
+        let output = hidden_cmd::cmd()
             .args(["/C", "systeminfo"])
             .output();
 

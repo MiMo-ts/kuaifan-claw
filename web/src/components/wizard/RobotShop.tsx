@@ -713,16 +713,15 @@ export default function RobotShop({
         <button
           type="button"
           onClick={onNext}
-          disabled={!selectedRobot}
           className={`px-6 py-2 rounded-lg font-medium transition-colors
             ${
-              !selectedRobot
-                ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+              selectedRobot
+                ? "bg-blue-500 text-white hover:bg-blue-600"
                 : "bg-blue-500 text-white hover:bg-blue-600"
             }
           `}
         >
-          {selectedRobot ? `已选择: ${selectedRobot.name}` : "请先选择机器人"}
+          {selectedRobot ? `已选择: ${selectedRobot.name}` : "直接进入聊天通道配置"}
         </button>
       </div>
     </div>

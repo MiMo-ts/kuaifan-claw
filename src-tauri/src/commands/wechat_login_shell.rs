@@ -4,6 +4,7 @@
 // - Linux:   依次尝试 xdg-terminal / gnome-terminal / konsole / xfce4-terminal / xterm
 //   全部失败时返回带可复制命令的错误（不崩溃）
 
+use crate::commands::hidden_cmd;
 use crate::env_paths::resolve_node;
 use std::path::PathBuf;
 use std::process::Command;

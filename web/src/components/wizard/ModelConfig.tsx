@@ -317,9 +317,13 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
         {selectedProvider === 'minimax' && (
           <p className="text-xs text-slate-700 bg-white/80 border border-slate-200 rounded px-2 py-1.5 mb-2">
             文本对话为 <strong>M2.1 / M2.5 / M2.7</strong> 等系列；「海螺」多为视频等多模态产品，请在{' '}
-            <a href="https://platform.minimaxi.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
+            <button
+              type="button"
+              onClick={() => invoke('open_url', { url: 'https://platform.minimaxi.com/' }).catch(() => {})}
+              className="text-blue-600 underline bg-none border-none cursor-pointer p-0 text-xs"
+            >
               MiniMax 开放平台
-            </a>{' '}
+            </button>{' '}
             核对当前可用的 <code className="text-xs bg-slate-100 px-1 rounded">model</code> 字段。
             <span className="block mt-1 text-slate-600">
               若选 <strong>M2.5（标准）</strong> 对话失败、换 <strong>M2.5 高速</strong> 正常，多为账号侧产品线/线路差异，建议默认选高速或 M2.7。
@@ -331,35 +335,38 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
           <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mb-2 space-y-1">
             <p>
               <strong>鉴权</strong>：请使用火山方舟控制台「
-              <a href="https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey" target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">
+              <button
+                type="button"
+                onClick={() => invoke('open_url', { url: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey' }).catch(() => {})}
+                className="text-blue-700 underline bg-none border-none cursor-pointer p-0 text-xs"
+              >
                 API Key 管理
-              </a>
+              </button>
               」里创建的 <strong>Ark API Key</strong>（长串密钥），<strong>不是</strong>火山引擎账号的 Access Key（AK）/ Secret Key（SK）。
             </p>
             <p>
               <strong>模型名</strong>：对话接口为 <code className="bg-amber-100 px-1 rounded">/api/v3/chat/completions</code>，<code className="bg-amber-100 px-1 rounded">model</code> 一般填控制台为推理接入点分配的 <strong>接入点 ID（ep-xxxx）</strong>，或模型广场展示的模型 ID。选列表第一项「自定义」后，在下方输入框粘贴完整 ep-xxxx。接入后请对照
-              {' '}<a href="https://www.volcengine.com/docs/82379/1298459" target="_blank" rel="noopener noreferrer" className="underline text-blue-700">Base URL 及鉴权</a>
+              {' '}<button type="button" onClick={() => invoke('open_url', { url: 'https://www.volcengine.com/docs/82379/1298459' }).catch(() => {})} className="underline text-blue-700 bg-none border-none cursor-pointer p-0 text-xs">Base URL 及鉴权</button>
               {' '}/{' '}
-              <a href="https://www.volcengine.com/docs/82379/1494384" target="_blank" rel="noopener noreferrer" className="underline text-blue-700">对话 API</a>。
+              <button type="button" onClick={() => invoke('open_url', { url: 'https://www.volcengine.com/docs/82379/1494384' }).catch(() => {})} className="underline text-blue-700 bg-none border-none cursor-pointer p-0 text-xs">对话 API</button>。
             </p>
             <p className="text-amber-800">
               <strong>生图 / 生视频</strong>：Seedream、Seedance 虽也暴露为 OpenAI-compatible 端点，但 prompt 格式与纯对话不同；本管理端测连仅验证「对话」能力。纯文生图请对照
-              {' '}<a href="https://www.volcengine.com/docs/82379/1541523" target="_blank" rel="noopener noreferrer" className="underline text-blue-700">图片生成 API</a>
+              {' '}<button type="button" onClick={() => invoke('open_url', { url: 'https://www.volcengine.com/docs/82379/1541523' }).catch(() => {})} className="underline text-blue-700 bg-none border-none cursor-pointer p-0 text-xs">图片生成 API</button>
               {' '}/{' '}
-              <a href="https://www.volcengine.com/docs/82379/1520757" target="_blank" rel="noopener noreferrer" className="underline text-blue-700">视频生成 API</a>。
+              <button type="button" onClick={() => invoke('open_url', { url: 'https://www.volcengine.com/docs/82379/1520757' }).catch(() => {})} className="underline text-blue-700 bg-none border-none cursor-pointer p-0 text-xs">视频生成 API</button>。
             </p>
           </div>
         )}
 
         {doc && (
-          <a
-            href={doc.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-blue-600 hover:underline mb-2 inline-block"
+          <button
+            type="button"
+            onClick={() => invoke('open_url', { url: doc.href }).catch(() => {})}
+            className="text-xs text-blue-600 hover:underline mb-2 inline-block bg-none border-none cursor-pointer p-0"
           >
-            {doc.label}（取 Key / 核对模型名）
-          </a>
+            {doc.label}
+          </button>
         )}
 
         {modelsLoading && (

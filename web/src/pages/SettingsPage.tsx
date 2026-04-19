@@ -79,6 +79,8 @@ export default function SettingsPage() {
 
   // 联系客服弹窗
   const [showContact, setShowContact] = useState(false);
+  // 联系客服图片放大
+  const [enlargedImage, setEnlargedImage] = useState(false);
 
   const fetchRuntimeLogs = useCallback(async () => {
     try {
@@ -479,24 +481,41 @@ export default function SettingsPage() {
       </div>
 
       {/* 联系客服弹窗 */}
-      {showContact && (
+      {showContact && !enlargedImage && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm flex flex-col items-center p-8">
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">联系客服</h3>
-            <p className="text-sm text-gray-500 mb-6 text-center">扫码添加快泛客服微信</p>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col items-center p-8">
+            <h3 className="text-2xl font-semibold text-gray-900 mb-3">联系客服</h3>
+            <p className="text-base text-gray-500 mb-6 text-center">扫码添加快泛客服微信</p>
             <img
               src="/images/二维码.jpg"
               alt="客服二维码"
-              className="w-64 h-64 object-contain rounded-xl border border-gray-200"
+              className="w-[520px] h-[520px] object-contain rounded-xl border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
+              onClick={() => setEnlargedImage(true)}
+              title="点击放大"
             />
             <button
               type="button"
               onClick={() => setShowContact(false)}
-              className="mt-6 px-6 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
+              className="mt-4 px-6 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
             >
               关闭
             </button>
           </div>
+        </div>
+      )}
+
+      {/* 联系客服图片放大 */}
+      {showContact && enlargedImage && (
+        <div
+          className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4 cursor-pointer"
+          onClick={() => setEnlargedImage(false)}
+        >
+          <img
+            src="/images/二维码.jpg"
+            alt="客服二维码"
+            className="max-w-full max-h-full object-contain rounded-xl"
+            title="点击关闭"
+          />
         </div>
       )}
 

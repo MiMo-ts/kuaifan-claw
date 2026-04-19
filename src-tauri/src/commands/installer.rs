@@ -3,6 +3,7 @@
 use crate::bundled_env::{
     resolve_bundled_openclaw_tarball, resolve_bundled_zip, resolve_bundled_zip_from_project,
 };
+use crate::commands::hidden_cmd;
 use crate::env_paths::{
     build_deps_env_path, env_root, git_exe, git_exists, node_exe, resolve_node, tar_gz_extract, unzip,
 };
@@ -13,8 +14,6 @@ use crate::models::{InstallProgress, OpenClawCnStatus};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 #[cfg(target_os = "macos")]
@@ -471,7 +470,7 @@ pub async fn install_pnpm(app: AppHandle) -> Result<String, String> {
     );
 
     #[cfg(windows)]
-    let output = Command::new("cmd")
+    let output = hidden_cmd::cmd()
         .args(["/C", "npm", "install", "-g", "pnpm"])
         .output()
         .map_err(|e| format!("执行失败: {}", e))?;
@@ -985,24 +984,30 @@ async fn run_npm_install_for_background(
 
     let output_result = tokio::task::spawn_blocking(move || {
         if let Some(ref pp) = pnpm_path_owned {
-            let mut c = std::process::Command::new(pp);
-            c.current_dir(&openclaw_dir_owned)
+            // pnpm 通过 cmd /c 隐藏窗口
+            let mut c = hidden_cmd::cmd();
+            c.arg("/C")
+                .arg(&*pp.to_string_lossy())
+                .current_dir(&openclaw_dir_owned)
                 .env("PATH", &deps_env_path)
                 .env("npm_config_registry", &registry_owned)
                 .args(&args);
             c.output()
         } else if let Some(ref cli) = npm_cli_owned {
-            let mut c = std::process::Command::new(&node_exe_owned);
-            c.arg(cli)
+            // npm-cli.js 通过 cmd /c 隐藏窗口
+            let mut c = hidden_cmd::cmd();
+            c.arg("/C")
+                .arg(&*node_exe_owned.to_string_lossy())
+                .arg(cli.as_os_str())
                 .current_dir(&openclaw_dir_owned)
                 .env("PATH", &deps_env_path)
                 .env("npm_config_registry", &registry_owned)
                 .args(&args);
             c.output()
         } else {
-            let mut c = std::process::Command::new("cmd");
-            c.args(["/C"])
-                .arg(&npm_cmd_owned)
+            let mut c = hidden_cmd::cmd();
+            c.arg("/C")
+                .arg(&*npm_cmd_owned.to_string_lossy())
                 .current_dir(&openclaw_dir_owned)
                 .env("PATH", &deps_env_path)
                 .env("npm_config_registry", &registry_owned)
@@ -1432,7 +1437,7 @@ fn fetch_openclaw_via_npm_pack_blocking(
         c.arg(cli).args(pack_args);
         c
     } else if cfg!(windows) {
-        let mut c = Command::new("cmd");
+        let mut c = hidden_cmd::cmd();
         c.args(["/C"]).arg(&npm_cmd).args(pack_args);
         c
     } else {
@@ -2104,7 +2109,7 @@ pub async fn install_openclaw(
                 apply_env(&mut c);
                 c.output()
             } else if cfg!(windows) {
-                let mut c = Command::new("cmd");
+                let mut c = hidden_cmd::cmd();
                 c.args(["/C"])
                     .arg(&npm_cmd)
                     .current_dir(&openclaw_dir_for_task)

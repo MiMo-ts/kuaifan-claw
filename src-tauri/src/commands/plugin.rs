@@ -1,9 +1,7 @@
 // 插件管理命令
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 use crate::bundled_env::resolve_bundled_plugin_tgz;
+use crate::commands::hidden_cmd;
 use crate::env_paths::resolve_node;
 use crate::mirror::{unpack_npm_tarball, InstallProgressEvent};
 use crate::models::PluginInfo;
@@ -930,7 +928,7 @@ fn install_plugin_deps_blocking(
             apply_registry(&mut c, &registry_primary);
             c.output()
         } else if cfg!(windows) {
-            let mut c = Command::new("cmd");
+            let mut c = hidden_cmd::cmd();
             c.args(["/C"])
                 .arg(&npm_cmd)
                 .current_dir(plugin_dir)
@@ -961,7 +959,7 @@ fn install_plugin_deps_blocking(
                     apply_registry(&mut c, "https://registry.npmjs.org");
                     c.output()
                 } else if cfg!(windows) {
-                    let mut c = Command::new("cmd");
+                    let mut c = hidden_cmd::cmd();
                     c.args(["/C"])
                         .arg(&npm_cmd)
                         .current_dir(plugin_dir)
@@ -1114,7 +1112,7 @@ fn install_plugin_deps_blocking(
             fill_env(&mut c);
             c.output()
         } else if cfg!(windows) {
-            let mut c = Command::new("cmd");
+            let mut c = hidden_cmd::cmd();
             c.args(["/C"])
                 .arg(&npm_cmd)
                 .current_dir(plugin_dir)
@@ -1318,7 +1316,7 @@ fn npm_pack_unpack_blocking(
                 .env("NPM_CONFIG_REGISTRY", &registry)
                 .output()
         } else if cfg!(windows) {
-            Command::new("cmd")
+            hidden_cmd::cmd()
                 .args(["/C"])
                 .arg(&npm_cmd)
                 .args(pack_args)
@@ -1428,7 +1426,7 @@ fn find_tsc_exe(data_base: &str) -> (PathBuf, String) {
         if let Some(npm) = npm_bin {
             // npm config get prefix 找全局包根目录（即使 GUI 进程 PATH 为空也能用绝对路径执行 npm）
             let prefix_out = if cfg!(windows) {
-                Command::new("cmd")
+                hidden_cmd::cmd()
                     .args(["/C"])
                     .arg(&npm)
                     .args(["config", "get", "prefix"])
@@ -1511,7 +1509,7 @@ fn build_ts_extensions_blocking(data_base: &str, plugin_dir: &str) -> Result<(),
     let args = vec!["--project", plugin_dir];
 
     let o = if cfg!(windows) {
-        Command::new("cmd")
+        hidden_cmd::cmd()
             .args(["/C"])
             .arg(&tsc_exe)
             .current_dir(plugin_dir)
@@ -1773,7 +1771,7 @@ fn feishu_node_sdk_fallback_install(
             fill_env(&mut c);
             c.output()
         } else if cfg!(windows) {
-            let mut c = Command::new("cmd");
+            let mut c = hidden_cmd::cmd();
             c.args(["/C"]).arg(&npm_cmd).current_dir(plugin_dir).args(args);
             fill_env(&mut c);
             c.output()

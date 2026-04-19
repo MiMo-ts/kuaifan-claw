@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
-import { Loader2, CheckCircle, Terminal, Smartphone, ChevronRight, Bot, Wifi, Download, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, CheckCircle, Terminal, Smartphone, ChevronRight, Bot, Wifi, Download } from 'lucide-react';
 
 /** 与后端 list_robot_templates 对齐，用于进入创建页时合并最新描述 / skills / MCP */
 interface RobotTemplateSync {
@@ -66,7 +66,6 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
   const [wechatPluginInstalled, setWechatPluginInstalled] = useState(false);
   const [wechatPluginInstalling, setWechatPluginInstalling] = useState(false);
   const [wechatLoginOpening, setWechatLoginOpening] = useState(false);
-  const [feishuAdvancedOpen, setFeishuAdvancedOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [defaultModel, setDefaultModel] = useState<{provider?: string; model_name?: string} | null>(null);
   const [localRobots, setLocalRobots] = useState<any[]>([]);
@@ -292,7 +291,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
         {step === 1 && (
           <div className="space-y-4">
             <h3 className="text-lg font-medium text-gray-900">已选择的机器人 <span className="text-sm font-normal text-gray-500">（可选）</span></h3>
-            {activeRobot && (
+            {activeRobot?.id && (
               <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                 <div className="flex items-center">
                   <span className="text-4xl mr-3">{activeRobot.icon}</span>
@@ -370,7 +369,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
                 onClick={() => setStep(2)}
                 className="flex-1 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
               >
-                {activeRobot ? '下一步：选择聊天通道' : '下一步：选择聊天通道（通用人设）'}
+                {activeRobot?.id ? '下一步：选择聊天通道' : '下一步：选择聊天通道（通用人设）'}
               </button>
             </div>
           </div>
@@ -727,95 +726,16 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">事件订阅 Verification Token（Webhook 模式可选）</label>
-                  <input
-                    type="text"
-                    value={channelConfig.verificationToken || ''}
-                    onChange={e =>
-                      setChannelConfig({ ...channelConfig, verificationToken: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="飞书开放平台 — 事件订阅页面，启用事件时必填"
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    白名单（可选）
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={channelConfig.allowFrom || ''}
+                    onChange={e => setChannelConfig({ ...channelConfig, allowFrom: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                    placeholder="飞书 Open ID，每行一个，留空则不限制（如 ou_xxx）"
                   />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">加密密钥 Encrypt Key（Webhook 模式可选）</label>
-                  <input
-                    type="text"
-                    value={channelConfig.encryptKey || ''}
-                    onChange={e =>
-                      setChannelConfig({ ...channelConfig, encryptKey: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="事件加密时必填，否则留空"
-                  />
-                </div>
-
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setFeishuAdvancedOpen(v => !v)}
-                    className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-sm"
-                  >
-                    <span className="font-medium text-gray-700">高级访问控制选项</span>
-                    {feishuAdvancedOpen
-                      ? <ChevronUp className="w-4 h-4 text-gray-500" />
-                      : <ChevronDown className="w-4 h-4 text-gray-500" />}
-                  </button>
-                  {feishuAdvancedOpen && (
-                    <div className="px-4 py-4 space-y-4 bg-white">
-                      <p className="text-xs text-gray-500">
-                        控制谁能向机器人发私信，以及哪些群聊可触发回复。默认私信需配对码，群聊开放。
-                      </p>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">私信策略（dmPolicy）</label>
-                        <select
-                          value={channelConfig.dmPolicy || 'pairing'}
-                          onChange={e => setChannelConfig({ ...channelConfig, dmPolicy: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="pairing">pairing — 未知用户需输入配对码（默认）</option>
-                          <option value="allowlist">allowlist — 仅白名单用户可发私信</option>
-                          <option value="open">open — 任何人可发私信</option>
-                          <option value="disabled">disabled — 关闭私信</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">私信白名单（allowFrom）</label>
-                        <textarea
-                          rows={3}
-                          value={channelConfig.allowFrom || ''}
-                          onChange={e => setChannelConfig({ ...channelConfig, allowFrom: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                          placeholder="飞书 Open ID，每行一个（如 ou_xxx）
-dmPolicy 为 allowlist 时生效"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">群聊策略（groupPolicy）</label>
-                        <select
-                          value={channelConfig.groupPolicy || 'open'}
-                          onChange={e => setChannelConfig({ ...channelConfig, groupPolicy: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="open">open — 任何群聊均可触发（默认）</option>
-                          <option value="allowlist">allowlist — 仅白名单群聊可触发</option>
-                          <option value="disabled">disabled — 关闭群聊响应</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">群聊白名单（groupAllowFrom）</label>
-                        <textarea
-                          rows={3}
-                          value={channelConfig.groupAllowFrom || ''}
-                          onChange={e => setChannelConfig({ ...channelConfig, groupAllowFrom: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                          placeholder="飞书 Open ID，每行一个
-groupPolicy 为 allowlist 时生效"
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
               </>
             )}

@@ -1,5 +1,6 @@
 // 环境检测命令
 
+use crate::commands::hidden_cmd;
 use crate::env_paths::{env_root, npm_exe, resolve_git, resolve_node};
 use crate::models::{EnvAutoFixResult, EnvCheckResult, EnvItem, EnvStatus};
 use std::path::{Path, PathBuf};
@@ -337,7 +338,7 @@ pub async fn check_pnpm_installation() -> Result<EnvItem, String> {
         .or_else(|| {
             #[cfg(windows)]
             {
-                Command::new("cmd")
+                hidden_cmd::cmd()
                     .args(["/C", "pnpm", "--version"])
                     .output()
                     .ok()
@@ -572,7 +573,7 @@ fn disk_free_gb_for_path(data_dir: &str) -> Option<f64> {
         let drive = windows_drive_letter_for_path(root).unwrap_or_else(|| "C".to_string());
 
         let ps = format!("(Get-PSDrive -Name '{}').Free / 1GB", drive);
-        let output = Command::new("powershell")
+        let output = hidden_cmd::powershell()
             .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
             .output()
             .ok()?;

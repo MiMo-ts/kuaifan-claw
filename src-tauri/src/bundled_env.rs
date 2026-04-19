@@ -18,7 +18,7 @@ pub const BUNDLED_SUBDIR: &str = "bundled-env";
 /// 内置 openclaw-cn 包 zip 的资源子目录
 pub const BUNDLED_OPENCLAW_SUBDIR: &str = "bundled-openclaw";
 /// 内置 openclaw-cn 包 zip 文件名（由构建脚本在 build 时产出）
-pub const BUNDLED_OPENCLAW_TARBALL: &str = "openclaw-cn.tgz";
+pub const BUNDLED_OPENCLAW_TARBALL: &str = "openclaw-cn.zip";
 /// 内置 chrome-extension tgz 的资源子目录（与 tauri.conf.json resources 一致）
 pub const BUNDLED_CHROME_EXTENSION_SUBDIR: &str = "plugins";
 /// 内置 chrome-extension tgz 文件名

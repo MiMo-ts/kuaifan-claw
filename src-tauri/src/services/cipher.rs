@@ -5,6 +5,8 @@
 use std::path::PathBuf;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 /// 加密凭据前缀（用于判断是否已加密）
 pub const CIPHER_PREFIX: &str = "enc:";
@@ -113,8 +115,12 @@ async fn get_machine_fingerprint() -> String {
 
 fn get_machine_fingerprint_sync() -> String {
     fn try_run(cmd: &str, args: &[&str]) -> String {
-        std::process::Command::new(cmd)
-            .args(args)
+        let mut c = std::process::Command::new(cmd);
+        #[cfg(windows)]
+        if cmd == "powershell" {
+            c.creation_flags(0x08000000);
+        }
+        c.args(args)
             .output()
             .ok()
             .and_then(|o| {

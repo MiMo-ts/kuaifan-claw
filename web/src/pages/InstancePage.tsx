@@ -28,12 +28,7 @@ function feishuChannelToFlat(cfg: unknown): Record<string, string> {
   const base: Record<string, string> = {
     appId: '',
     appSecret: '',
-    verificationToken: '',
-    encryptKey: '',
-    dmPolicy: 'pairing',
     allowFrom: '',
-    groupPolicy: 'open',
-    groupAllowFrom: '',
   };
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return base;
   const o = cfg as Record<string, unknown>;
@@ -48,12 +43,7 @@ function feishuChannelToFlat(cfg: unknown): Record<string, string> {
     ...base,
     appId: pickStr('appId'),
     appSecret: pickStr('appSecret'),
-    verificationToken: pickStr('verificationToken'),
-    encryptKey: pickStr('encryptKey'),
-    dmPolicy: pickStr('dmPolicy') || 'pairing',
     allowFrom: pickLines('allowFrom'),
-    groupPolicy: pickStr('groupPolicy') || 'open',
-    groupAllowFrom: pickLines('groupAllowFrom'),
   };
 }
 
@@ -93,7 +83,6 @@ export default function InstancePage() {
   const [modelList, setModelList] = useState<any[]>([]);
   const [modelListLoading, setModelListLoading] = useState(false);
   const [modelSectionOpen, setModelSectionOpen] = useState(true);
-  const [feishuAdvancedOpen, setFeishuAdvancedOpen] = useState(false);
   const [showFeishuWizard, setShowFeishuWizard] = useState(false);
 
   useEffect(() => { loadInstances(); }, []);
@@ -151,15 +140,8 @@ export default function InstancePage() {
     if (inst.channel_type === 'feishu') {
       const flat = feishuChannelToFlat(inst.channel_config);
       setEditChannelConfig(flat);
-      setFeishuAdvancedOpen(
-        flat.dmPolicy !== 'pairing'
-        || flat.groupPolicy !== 'open'
-        || flat.allowFrom.trim().length > 0
-        || flat.groupAllowFrom.trim().length > 0,
-      );
     } else {
       setEditChannelConfig((inst.channel_config as Record<string, string>) || {});
-      setFeishuAdvancedOpen(false);
     }
     setEditModelProvider(inst.model?.provider || '');
     const mid = inst.model?.model_name || '';
@@ -390,88 +372,14 @@ export default function InstancePage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">事件订阅 Verification Token（Webhook 可选）</label>
-                    <input
-                      type="text"
-                      value={editChannelConfig.verificationToken || ''}
-                      onChange={e => setEditChannelConfig(prev => ({ ...prev, verificationToken: e.target.value }))}
+                    <label className="block text-xs text-gray-500 mb-1">白名单（allowFrom，可选）</label>
+                    <textarea
+                      rows={3}
+                      value={editChannelConfig.allowFrom || ''}
+                      onChange={e => setEditChannelConfig(prev => ({ ...prev, allowFrom: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                      placeholder="启用事件订阅时填写"
+                      placeholder={'飞书 Open ID，每行一个（如 ou_xxx）'}
                     />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">加密密钥 Encrypt Key（Webhook 可选）</label>
-                    <input
-                      type="text"
-                      value={editChannelConfig.encryptKey || ''}
-                      onChange={e => setEditChannelConfig(prev => ({ ...prev, encryptKey: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                      placeholder="事件加密时填写"
-                    />
-                  </div>
-
-                  <div className="border border-gray-200 rounded-lg overflow-hidden">
-                    <button
-                      type="button"
-                      onClick={() => setFeishuAdvancedOpen(v => !v)}
-                      className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 hover:bg-gray-100 text-left text-sm font-medium text-gray-800"
-                    >
-                      <span>配对码与白名单（访问控制）</span>
-                      {feishuAdvancedOpen ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
-                    </button>
-                    {feishuAdvancedOpen && (
-                      <div className="px-3 py-3 space-y-3 border-t border-gray-100 bg-white">
-                        <p className="text-xs text-gray-500 leading-relaxed">
-                          配对码由网关在「私信策略」为 pairing 时自动生成，并通过机器人回复给首次私聊的用户，无需在此手动填写。
-                          若改为 allowlist，请在下方的私信白名单中填写允许的飞书 Open ID（ou_xxx 等）。
-                        </p>
-                        <div>
-                          <label className="block text-xs text-gray-600 mb-1">私信策略（dmPolicy）</label>
-                          <select
-                            value={editChannelConfig.dmPolicy || 'pairing'}
-                            onChange={e => setEditChannelConfig(prev => ({ ...prev, dmPolicy: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="pairing">pairing — 未知用户需输入配对码（默认）</option>
-                            <option value="allowlist">allowlist — 仅白名单用户可发私信</option>
-                            <option value="open">open — 任何人可发私信</option>
-                            <option value="disabled">disabled — 关闭私信</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 mb-1">私信白名单（allowFrom）</label>
-                          <textarea
-                            rows={3}
-                            value={editChannelConfig.allowFrom || ''}
-                            onChange={e => setEditChannelConfig(prev => ({ ...prev, allowFrom: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                            placeholder={'飞书 Open ID，每行一个（如 ou_xxx）\ndmPolicy 为 allowlist 时生效'}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 mb-1">群聊策略（groupPolicy）</label>
-                          <select
-                            value={editChannelConfig.groupPolicy || 'open'}
-                            onChange={e => setEditChannelConfig(prev => ({ ...prev, groupPolicy: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="open">open — 任何群聊均可触发（默认）</option>
-                            <option value="allowlist">allowlist — 仅白名单群聊可触发</option>
-                            <option value="disabled">disabled — 关闭群聊响应</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 mb-1">群聊白名单（groupAllowFrom）</label>
-                          <textarea
-                            rows={3}
-                            value={editChannelConfig.groupAllowFrom || ''}
-                            onChange={e => setEditChannelConfig(prev => ({ ...prev, groupAllowFrom: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                            placeholder={'飞书 Open ID，每行一个\ngroupPolicy 为 allowlist 时生效'}
-                          />
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
               )}
