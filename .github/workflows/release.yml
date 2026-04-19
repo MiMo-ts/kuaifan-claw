@@ -32,13 +32,8 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      - name: Download bundled resources
-        shell: pwsh
-        working-directory: src-tauri
-        run: |
-          if (Test-Path ./download-bundles.ps1) {
-            pwsh -File ./download-bundles.ps1
-          }
+      # 捆绑文件已存在于 git 仓库，跳过下载步骤
+      # (如需更新内置资源，在本地运行 src-tauri/download-bundles.ps1 后提交)
 
       - name: Install frontend dependencies
         working-directory: web
