@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   release:
@@ -119,3 +121,27 @@ jobs:
           files: update-*.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy latest.json to GitHub Pages
+        run: |
+          mkdir -Force $env:GITHUB_WORKSPACE/pages
+          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $json = @{
+            version = $version
+            notes = "快泛claw v$version 发布"
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = ""
+                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($exe.Name)"
+              }
+            }
+          } | ConvertTo-Json -Depth 3
+          $json | Out-File -FilePath "$env:GITHUB_WORKSPACE/pages/latest.json" -Encoding UTF8
+
+      - name: Upload to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: pages
+          publish_branch: gh-pages
