@@ -62,7 +62,7 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           releaseName: "快泛claw ${{ github.ref_name }}"
-          args: --bundles nsis --no-sign
+          args: --bundles nsis
 
       - name: Find exe file
         shell: pwsh
@@ -72,13 +72,14 @@ jobs:
           Write-Output "EXE_NAME=$($exe.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding UTF8 -Append
           Write-Output "Found exe: $($exe.FullName)"
 
-      - name: Upload exe to release
+      - name: Upload exe and signature to release
         uses: softprops/action-gh-release@v2
         with:
           tag: ${{ github.ref_name }}
           name: "快泛claw ${{ github.ref_name }}"
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -101,13 +102,15 @@ jobs:
         shell: pwsh
         run: |
           $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $sigFile = [System.IO.Path]::ChangeExtension($exe.FullName, ".sig")
+          $signature = if (Test-Path $sigFile) { Get-Content $sigFile -Raw } else { "" }
           $version = "${{ github.ref_name }}".TrimStart('v')
           $json = @{
             version = $version
             notes = "快泛claw v$version 发布"
             platforms = @{
               "windows-x86_64" = @{
-                signature = ""
+                signature = $signature.Trim()
                 url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($exe.Name)"
               }
             }
@@ -126,13 +129,15 @@ jobs:
         run: |
           mkdir -Force $env:GITHUB_WORKSPACE/pages
           $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $sigFile = [System.IO.Path]::ChangeExtension($exe.FullName, ".sig")
+          $signature = if (Test-Path $sigFile) { Get-Content $sigFile -Raw } else { "" }
           $version = "${{ github.ref_name }}".TrimStart('v')
           $json = @{
             version = $version
             notes = "快泛claw v$version 发布"
             platforms = @{
               "windows-x86_64" = @{
-                signature = ""
+                signature = $signature.Trim()
                 url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($exe.Name)"
               }
             }
