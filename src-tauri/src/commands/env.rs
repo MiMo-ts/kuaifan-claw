@@ -428,6 +428,12 @@ pub async fn check_homebrew() -> Result<EnvItem, String> {
     }
 }
 
+/// 获取应用版本号
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 // 网络连通性检测（探测实际下载资源，比首页检测更准确）
 #[tauri::command]
 pub async fn check_network_connectivity() -> Result<EnvItem, String> {

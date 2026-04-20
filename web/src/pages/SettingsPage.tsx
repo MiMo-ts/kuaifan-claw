@@ -73,6 +73,7 @@ export default function SettingsPage() {
   const [appVersionInfo, setAppVersionInfo] = useState<any>(null);
   const [openClawVersionInfo, setOpenClawVersionInfo] = useState<any>(null);
   const [downloading, setDownloading] = useState(false);
+  const [currentAppVersion, setCurrentAppVersion] = useState('1.0.22');
 
   // 日志放大弹窗
   const [logModal, setLogModal] = useState<{ type: 'gateway' | 'manager'; html: string } | null>(null);
@@ -134,6 +135,13 @@ export default function SettingsPage() {
     return () => clearInterval(id);
   }, [logLive, fetchRuntimeLogs]);
 
+  // 获取应用版本号
+  useEffect(() => {
+    invoke<string>('get_app_version')
+      .then(setCurrentAppVersion)
+      .catch(() => console.error('获取应用版本失败'));
+  }, []);
+
   const handleReturnToWizard = () => {
     if (
       !window.confirm(
@@ -168,11 +176,11 @@ export default function SettingsPage() {
     setCheckingVersion(true);
     try {
       // 检查应用版本
-      const appInfo = await updateService.checkAppVersion('1.0.0');
+      const appInfo = await updateService.checkAppVersion(currentAppVersion);
       setAppVersionInfo(appInfo);
-      
+
       // 检查OpenClaw版本
-      const openClawInfo = await updateService.checkOpenClawVersion('1.0.0');
+      const openClawInfo = await updateService.checkOpenClawVersion(currentAppVersion);
       setOpenClawVersionInfo(openClawInfo);
       
       if (appInfo.hasUpdate || openClawInfo.hasUpdate) {
@@ -363,7 +371,7 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between mb-2">
                 <div className="font-medium text-gray-900">快泛claw</div>
                 <div className="text-sm">
-                  当前版本: <span className="font-medium">1.0.0</span>
+                  当前版本: <span className="font-medium">{currentAppVersion}</span>
                   {appVersionInfo && appVersionInfo.latestVersion && (
                     <span className="ml-2">
                       最新版本: <span className={`font-medium ${appVersionInfo.hasUpdate ? 'text-green-600' : 'text-gray-600'}`}>{appVersionInfo.latestVersion}</span>
@@ -456,7 +464,7 @@ export default function SettingsPage() {
         <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">关于</h2>
           <div className="space-y-2 text-sm text-gray-600">
-            <div>版本: 1.0.0</div>
+            <div>版本: {currentAppVersion}</div>
             <div>快泛claw</div>
           </div>
           <button

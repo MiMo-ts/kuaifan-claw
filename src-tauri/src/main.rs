@@ -579,6 +579,7 @@ fn main() {
             commands::env::check_npm_version,
             commands::env::check_pnpm_installation,
             commands::env::check_homebrew,
+            commands::env::get_app_version,
             commands::env::check_network_connectivity,
             commands::env::check_disk_space,
             commands::env::run_env_check,
