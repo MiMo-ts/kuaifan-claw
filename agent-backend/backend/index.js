@@ -1,15 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const mongoose = require('mongoose');
+const { sequelize } = require('./src/config/database');
 
 // 加载环境变量
 dotenv.config();
-
-// 连接数据库
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/agent_backend')
-.then(() => console.log('MongoDB connected'))
-.catch(err => console.error('MongoDB connection error:', err));
 
 const app = express();
 
@@ -25,21 +20,36 @@ app.use('/api/stats', require('./src/routes/stats'));
 
 // 健康检查
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: '正常' });
 });
 
 // 404 处理
 app.use((req, res) => {
-  res.status(404).json({ message: 'Route not found' });
+  res.status(404).json({ message: '路由未找到' });
 });
 
 // 错误处理
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: 'Internal server error' });
+  console.error('服务器错误:', err.stack);
+  res.status(500).json({ message: '内部服务器错误' });
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+
+// 先启动服务器，再连接数据库（不做任何自动表修改！）
+app.listen(PORT, async () => {
+  console.log(`=================================`);
+  console.log(`🚀 服务器运行在端口 ${PORT}`);
+  console.log(`=================================`);
+
+  try {
+    await sequelize.authenticate();
+    console.log('✅ MySQL数据库连接成功');
+    console.log('ℹ️ 跳过表自动同步，表结构需要手动维护');
+    console.log(`=================================`);
+  } catch (err) {
+    console.error('❌ 启动时出错:', err);
+  }
 });
+
+module.exports = { sequelize };

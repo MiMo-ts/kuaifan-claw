@@ -1,72 +1,71 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'react-hot-toast';
-import axios from 'axios';
-import { getInviteCodeValidateUrl, API_CONFIG } from '../config/api';
 
 const InviteCodePage = () => {
   const [inviteCode, setInviteCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
-  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!inviteCode.trim()) {
       toast.error('请输入邀请码');
       return;
     }
 
     setIsLoading(true);
-    
+
     try {
       console.log('=== 开始验证邀请码 ===');
       console.log('邀请码:', inviteCode);
-      console.log('API 地址:', getInviteCodeValidateUrl());
-      
-      // 调用代理后台 API 验证邀请码
-      const response = await axios.post(getInviteCodeValidateUrl(), {
-        code: inviteCode.trim(),
-        platform: 'windows'
+
+      // 调用 Tauri 命令验证邀请码并绑定设备
+      const dataDir = await invoke<string>('get_data_dir');
+      const result = await invoke<{
+        valid: boolean;
+        already_bound: boolean;
+        device_count: number;
+        max_devices: number;
+        message: string;
+      }>('validate_and_bind_invite_code', {
+        inviteCode: inviteCode.trim(),
+        apiUrl: 'http://kuaifandl.asia',
+        dataDir: dataDir,
       });
-      
-      console.log('API 响应:', response);
-      console.log('响应数据:', response.data);
-      
-      if (response.data.valid) {
+
+      console.log('验证结果:', result);
+
+      if (result.valid) {
         console.log('✅ 邀请码验证成功');
         // 验证成功，保存验证状态到本地存储
         localStorage.setItem('inviteCodeValidated', 'true');
-        
+
         // 触发自定义事件，通知 App 组件邀请码验证成功
         const event = new CustomEvent('inviteCodeValidated', {
           detail: { validated: true }
         });
         window.dispatchEvent(event);
-        
-        // 验证成功，跳转到环境检查页面
-        toast.success('邀请码验证成功');
-        // 跳转到根路径，会自动重定向到环境配置页
-        navigate('/');
+
+        toast.success(result.message || '邀请码验证成功');
+        // 页面会自动因为 App 组件状态变化而重新渲染，无需手动跳转
       } else {
         console.log('❌ 邀请码验证失败');
-        toast.error('邀请码验证失败，请检查邀请码是否正确');
+        toast.error(result.message || '邀请码验证失败，请检查邀请码是否正确');
       }
     } catch (error: any) {
       console.error('❌ 邀请码验证异常');
       console.error('错误详情:', error);
-      console.error('错误响应:', error.response);
-      console.error('错误消息:', error.message);
-      
+
       let errorMessage = '邀请码验证失败，请检查邀请码是否正确';
-      
-      if (error.code === 'ERR_NETWORK') {
-        errorMessage = '无法连接到代理后台，请确保代理后台正在运行';
-      } else if (error.response) {
-        errorMessage = error.response.data?.message || errorMessage;
+
+      if (error.toString().includes('网络请求失败')) {
+        errorMessage = '无法连接到服务器，请检查网络连接';
+      } else if (error.toString().includes('API响应失败')) {
+        errorMessage = `服务器错误: ${error}`;
       }
-      
+
       toast.error(errorMessage);
     } finally {
       setIsLoading(false);
@@ -105,10 +104,11 @@ const InviteCodePage = () => {
               required
               className="block w-full pl-10 pr-3 py-3 bg-white/10 border border-white/20 rounded-lg backdrop-blur-sm text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"
               value={inviteCode}
-              onChange={(e) => setInviteCode(e.target.value)}
+              onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
               onFocus={() => setIsInputFocused(true)}
               onBlur={() => setIsInputFocused(false)}
               placeholder="请输入邀请码"
+              maxLength={10}
             />
           </div>
 

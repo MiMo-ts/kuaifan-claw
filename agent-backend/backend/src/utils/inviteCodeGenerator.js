@@ -50,7 +50,7 @@ function decryptInviteCode(encryptedCode, secret) {
     decrypted += decipher.final('utf8');
     return decrypted;
   } catch (error) {
-    console.error('Error decrypting invite code:', error);
+    console.error('邀请码解密失败:', error);
     return null;
   }
 }

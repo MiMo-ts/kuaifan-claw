@@ -11,7 +11,7 @@ function App() {
   const { user, loading } = useAuthStore();
 
   if (loading) {
-    return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
+    return <div className="flex items-center justify-center min-h-screen">加载中...</div>;
   }
 
   return (
@@ -22,7 +22,6 @@ function App() {
         <Route path="/invite-codes" element={user ? <InviteCodePage /> : <Navigate to="/login" />} />
         <Route path="/users" element={user && user.role === 'admin' ? <UserPage /> : <Navigate to="/dashboard" />} />
         <Route path="/stats" element={user ? <StatsPage /> : <Navigate to="/login" />} />
-        <Route path="/register" element={<Navigate to="/login" />} />
         <Route path="/" element={<Navigate to={user ? "/dashboard" : "/login"} />} />
       </Routes>
     </Router>

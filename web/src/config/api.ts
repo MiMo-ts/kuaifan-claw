@@ -3,9 +3,8 @@
 // 例如: 'https://your-server.com/api' 或 'http://your-server-ip:5000/api'
 
 export const API_CONFIG = {
-  // 开发环境使用本地地址
-  // 生产环境修改为你的服务器地址
-  baseURL: 'http://localhost:5000/api',
+  // 服务器地址
+  baseURL: 'http://kuaifandl.asia/api',
   
   // 邀请码验证接口
   inviteCodeValidate: '/invite-codes/validate',

@@ -1,49 +1,59 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 const bcrypt = require('bcryptjs');
 
-const userSchema = new mongoose.Schema({
+const User = sequelize.define('User', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   username: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING(191),
+    allowNull: false,
     unique: true
   },
   email: {
-    type: String,
-    required: false,
+    type: DataTypes.STRING(191),
+    allowNull: true,
     unique: true,
-    lowercase: true
+    validate: {
+      isEmail: true
+    }
   },
   password: {
-    type: String,
-    required: true
+    type: DataTypes.STRING(255),
+    allowNull: false
   },
   role: {
-    type: String,
-    enum: ['admin', 'agent'],
-    required: true
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.ENUM('admin', 'agent'),
+    allowNull: false,
+    defaultValue: 'agent'
   }
-});
-
-// 密码加密
-userSchema.pre('save', async function() {
-  if (!this.isModified('password')) {
-    return;
+}, {
+  tableName: 'users',
+  timestamps: true,
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  hooks: {
+    beforeCreate: async (user) => {
+      if (user.password) {
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(user.password, salt);
+      }
+    },
+    beforeUpdate: async (user) => {
+      if (user.changed('password')) {
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(user.password, salt);
+      }
+    }
   }
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
 });
 
 // 密码验证
-userSchema.methods.matchPassword = async function(password) {
+User.prototype.matchPassword = async function(password) {
   return await bcrypt.compare(password, this.password);
 };
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = User;

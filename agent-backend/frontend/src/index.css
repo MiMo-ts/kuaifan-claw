@@ -2,37 +2,118 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-#root {
-  width: 100%;
-  min-height: 100vh;
-}
-
-@media (prefers-color-scheme: light) {
+@layer base {
   :root {
-    color: #213547;
-    background-color: #ffffff;
+    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.6;
+    font-weight: 400;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  #root {
+    width: 100%;
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  /* Clean button styles */
+  .btn {
+    @apply inline-flex items-center justify-center px-5 py-2.5 text-sm font-medium rounded-xl transition-all duration-200;
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2;
+  }
+
+  .btn-primary {
+    @apply bg-accent text-white hover:bg-violet-800 active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply bg-slate-100 text-slate-700 hover:bg-slate-200 active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply text-slate-600 hover:text-slate-900 hover:bg-slate-100;
+  }
+
+  .btn-danger {
+    @apply bg-red-50 text-red-600 hover:bg-red-100;
+  }
+
+  /* Clean input styles */
+  .input {
+    @apply w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl;
+    @apply placeholder:text-slate-400;
+    @apply focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100;
+    @apply transition-all duration-200;
+  }
+
+  /* Clean card styles */
+  .card {
+    @apply bg-white rounded-2xl shadow-card;
+  }
+
+  /* Status badges */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full;
+  }
+
+  .badge-success {
+    @apply bg-emerald-50 text-emerald-700;
+  }
+
+  .badge-warning {
+    @apply bg-amber-50 text-amber-700;
+  }
+
+  .badge-danger {
+    @apply bg-red-50 text-red-700;
+  }
+
+  .badge-info {
+    @apply bg-violet-50 text-violet-700;
+  }
+
+  .badge-neutral {
+    @apply bg-slate-100 text-slate-600;
+  }
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Selection color */
+::selection {
+  background-color: #e9d5ff;
+  color: #581c87;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }

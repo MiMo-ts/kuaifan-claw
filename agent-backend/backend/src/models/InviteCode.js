@@ -1,49 +1,76 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const inviteCodeSchema = new mongoose.Schema({
+const InviteCode = sequelize.define('InviteCode', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   code: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING(100),
+    allowNull: false,
     unique: true
   },
   createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    references: {
+      model: 'users',
+      key: 'id'
+    }
   },
   createdByName: {
-    type: String,
-    required: true
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.STRING(191),
+    allowNull: false
   },
   expiresAt: {
-    type: Date,
-    required: true
+    type: DataTypes.DATE,
+    allowNull: false
   },
   status: {
-    type: String,
-    enum: ['active', 'used', 'disabled'],
-    default: 'active'
+    type: DataTypes.ENUM('active', 'used', 'disabled'),
+    defaultValue: 'active'
+  },
+  maxDevices: {
+    type: DataTypes.INTEGER,
+    defaultValue: 3
   },
   usedBy: {
-    type: String,
-    default: null
+    type: DataTypes.STRING(191),
+    allowNull: true,
+    defaultValue: null
   },
   usedAt: {
-    type: Date,
-    default: null
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null
   },
   platform: {
-    type: String,
-    default: null
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    defaultValue: null
   },
   metadata: {
-    type: Object,
-    default: {}
+    type: DataTypes.TEXT,
+    defaultValue: null,
+    get() {
+      const value = this.getDataValue('metadata');
+      try {
+        return value ? JSON.parse(value) : {};
+      } catch {
+        return {};
+      }
+    },
+    set(value) {
+      this.setDataValue('metadata', value ? JSON.stringify(value) : null);
+    }
   }
+}, {
+  tableName: 'invitecodes',
+  timestamps: true,
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
 });
 
-module.exports = mongoose.model('InviteCode', inviteCodeSchema);
+module.exports = InviteCode;

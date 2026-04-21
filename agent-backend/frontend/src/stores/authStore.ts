@@ -13,8 +13,7 @@ interface AuthState {
   token: string | null;
   loading: boolean;
   error: string | null;
-  login: (email: string, password: string) => Promise<void>;
-  register: (username: string, email: string, password: string, role: 'admin' | 'agent') => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   checkAuth: () => Promise<void>;
 }
@@ -27,32 +26,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   login: async (username: string, password: string) => {
     set({ loading: true, error: null });
     try {
-      console.log('Login request started');
+      console.log('开始登录请求...');
       const response = await axios.post('/api/auth/login', { username, password });
-      console.log('Login response:', response.data);
+      console.log('登录响应:', response.data);
       const { token, user } = response.data;
       localStorage.setItem('token', token);
       localStorage.setItem('user', JSON.stringify(user));
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      console.log('Setting user state:', user);
+      console.log('设置用户状态:', user);
       set({ user, token, loading: false });
-      console.log('Login successful');
+      console.log('登录成功！');
     } catch (error: unknown) {
-      console.error('Login error:', error);
-      set({ error: (error as any)?.response?.data?.message || 'Login failed', loading: false });
-    }
-  },
-  register: async (username: string, email: string, password: string, role: 'admin' | 'agent') => {
-    set({ loading: true, error: null });
-    try {
-      const response = await axios.post('/api/auth/register', { username, email, password, role });
-      const { token, user } = response.data;
-      localStorage.setItem('token', token);
-      localStorage.setItem('user', JSON.stringify(user));
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      set({ user, token, loading: false });
-    } catch (error: unknown) {
-      set({ error: (error as any)?.response?.data?.message || 'Registration failed', loading: false });
+      console.error('登录出错:', error);
+      const errorMsg = (error as any)?.response?.data?.message || '登录失败，请重试';
+      set({ error: errorMsg, loading: false });
     }
   },
   logout: () => {
@@ -67,8 +54,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ loading: true });
       try {
         axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        // 这里可以添加一个验证token的API端点
-        // 暂时使用本地存储的用户信息
         const userStr = localStorage.getItem('user');
         if (userStr) {
           try {

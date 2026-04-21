@@ -88,10 +88,10 @@ pub fn read_invite_code(data_dir: &PathBuf) -> Result<Option<String>, String> {
 }
 
 /// 检查是否已经验证过邀请码
-/// 
+///
 /// # Arguments
 /// * `data_dir` - 数据目录路径
-/// 
+///
 /// # Returns
 /// * `Ok(bool)` - 是否已验证过邀请码
 /// * `Err(String)` - 检查过程中发生的错误
@@ -101,4 +101,44 @@ pub fn is_invite_code_validated(data_dir: &PathBuf) -> Result<bool, String> {
         Ok(None) => Ok(false),
         Err(e) => Err(e),
     }
+}
+
+/// 保存设备指纹到本地文件
+///
+/// # Arguments
+/// * `data_dir` - 数据目录路径
+/// * `fingerprint` - 设备指纹
+///
+/// # Returns
+/// * `Ok(())` - 保存成功
+/// * `Err(String)` - 保存过程中发生的错误
+pub fn save_device_fingerprint(data_dir: &PathBuf, fingerprint: &str) -> Result<(), String> {
+    let fingerprint_file = data_dir.join("device_fingerprint.txt");
+
+    let mut file = File::create(&fingerprint_file).map_err(|e| format!("创建设备指纹文件失败: {}", e))?;
+    file.write_all(fingerprint.as_bytes()).map_err(|e| format!("写入设备指纹文件失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 读取本地保存的设备指纹
+///
+/// # Arguments
+/// * `data_dir` - 数据目录路径
+///
+/// # Returns
+/// * `Ok(Option<String>)` - 设备指纹，如果不存在返回 None
+/// * `Err(String)` - 读取过程中发生的错误
+pub fn read_device_fingerprint(data_dir: &PathBuf) -> Result<Option<String>, String> {
+    let fingerprint_file = data_dir.join("device_fingerprint.txt");
+
+    if !fingerprint_file.exists() {
+        return Ok(None);
+    }
+
+    let mut file = File::open(&fingerprint_file).map_err(|e| format!("打开设备指纹文件失败: {}", e))?;
+    let mut fingerprint = String::new();
+    file.read_to_string(&mut fingerprint).map_err(|e| format!("读取设备指纹文件失败: {}", e))?;
+
+    Ok(Some(fingerprint.trim().to_string()))
 }

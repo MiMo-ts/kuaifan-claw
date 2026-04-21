@@ -526,28 +526,14 @@ fn main() {
     migrate_resources_on_first_run(&data_dir_abs, &exe_path);
 
     // 检查邀请码
-    // 移除 debug 模式的限制，确保在所有模式下都验证邀请码
     match services::invite_code::is_invite_code_validated(&data_dir_abs) {
         Ok(true) => {
             tracing::info!("邀请码已验证，继续启动应用");
         },
         Ok(false) => {
-            // 显示邀请码输入提示
             tracing::info!("邀请码未验证，需要输入邀请码");
-            
-            // 简化邀请码验证逻辑，确保应用能够正常启动
-            // 实际部署时应该通过对话框获取用户输入并通过 API 验证
-            
-            // 这里我们暂时跳过邀请码验证，确保应用能够正常启动
-            // 实际部署时应该实现完整的邀请码验证逻辑
-            tracing::info!("跳过邀请码验证，继续启动应用");
-            
-            // 保存一个默认邀请码，确保后续启动时不会再次提示
-            let default_code = "DEFAULT_INVITE_CODE";
-            if let Err(e) = services::invite_code::save_invite_code(&data_dir_abs, default_code) {
-                tracing::error!("保存邀请码失败: {}", e);
-            }
-            tracing::info!("邀请码验证成功，继续启动应用");
+            // 不再跳过验证，而是让前端处理邀请码输入
+            // 应用仍会启动，但前端会显示邀请码验证界面
         },
         Err(e) => {
             tracing::error!("检查邀请码状态失败: {}", e);
@@ -671,6 +657,9 @@ fn main() {
             commands::feishu_wizard::open_feishu_url,
             commands::feishu_wizard::probe_feishu,
             commands::feishu_wizard::get_feishu_ws_info,
+            // 邀请码验证
+            commands::invite::get_machine_fingerprint,
+            commands::invite::validate_and_bind_invite_code,
         ])
         .setup(|app| {
             tracing::info!("Tauri 应用初始化完成");

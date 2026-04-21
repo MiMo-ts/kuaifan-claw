@@ -9,6 +9,7 @@ pub mod gateway_ws;
 pub mod hidden_cmd;
 pub mod installer;
 pub mod instance;
+pub mod invite;
 pub mod log;
 pub mod model;
 pub mod monitoring;
