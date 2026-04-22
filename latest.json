@@ -1,10 +1,10 @@
 {
-  "version": "1.0.30",
-  "notes": "快泛claw v1.0.30 发布",
+  "version": "1.0.31",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/MiMo-ts/kuaifan-claw/releases/download/v1.0.30/claw_1.0.30_x64-setup.exe",
-      "signature": ""
+      "signature": "",
+      "url": "https://github.com/MiMo-ts/kuaifan-claw/releases/download/v1.0.31/claw_1.0.31_x64-setup.exe"
     }
-  }
+  },
+  "notes": "快泛claw v1.0.31 发布"
 }
