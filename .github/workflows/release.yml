@@ -197,4 +197,5 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add "./update-latest.json"
           git commit -m "chore: update latest.json for ${{ github.ref_name }}"
-          git push origin main
+          # Push current commit to main branch (use HEAD:main since we're in detached HEAD state)
+          git push origin HEAD:main
