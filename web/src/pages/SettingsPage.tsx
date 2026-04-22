@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { Moon, Sun, Monitor, RefreshCw, ArrowLeft, Loader2, Trash2, X, RotateCcw, MessageCircle, Download, CheckCircle } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import AnsiUp from 'ansi-to-html';
-import { updateService } from '../services/updateService';
+import { updateService, ReleaseInfo } from '../services/updateService';
 
 interface RuntimeLogsTail {
   gateway: string;
@@ -70,10 +70,10 @@ export default function SettingsPage() {
 
   // 版本检查相关状态
   const [checkingVersion, setCheckingVersion] = useState(false);
-  const [appVersionInfo, setAppVersionInfo] = useState<any>(null);
-  const [openClawVersionInfo, setOpenClawVersionInfo] = useState<any>(null);
+  const [recentReleases, setRecentReleases] = useState<ReleaseInfo[]>([]);
   const [downloading, setDownloading] = useState(false);
   const [currentAppVersion, setCurrentAppVersion] = useState('1.0.22');
+  const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null);
 
   // 日志放大弹窗
   const [logModal, setLogModal] = useState<{ type: 'gateway' | 'manager'; html: string } | null>(null);
@@ -171,22 +171,16 @@ export default function SettingsPage() {
     }
   };
 
-  // 检查版本更新
+  // 检查版本更新 - 从 GitHub 获取最新3个版本
   const handleCheckVersion = async () => {
     setCheckingVersion(true);
     try {
-      // 检查应用版本
-      const appInfo = await updateService.checkAppVersion(currentAppVersion);
-      setAppVersionInfo(appInfo);
-
-      // 检查OpenClaw版本
-      const openClawInfo = await updateService.checkOpenClawVersion(currentAppVersion);
-      setOpenClawVersionInfo(openClawInfo);
-      
-      if (appInfo.hasUpdate || openClawInfo.hasUpdate) {
-        toast.success('检测到新版本');
+      const releases = await updateService.fetchRecentReleases(3);
+      setRecentReleases(releases);
+      if (releases.length > 0) {
+        toast.success(`获取到 ${releases.length} 个版本`);
       } else {
-        toast.success('当前已是最新版本');
+        toast.error('获取版本失败');
       }
     } catch (error) {
       toast.error('版本检查失败');
@@ -195,20 +189,27 @@ export default function SettingsPage() {
     }
   };
 
-  // 下载并安装更新
-  const handleDownloadUpdate = async (url: string) => {
+  // 下载指定版本
+  const handleDownloadVersion = async (release: ReleaseInfo) => {
+    const exeAsset = updateService.getExeAsset(release);
+    if (!exeAsset) {
+      toast.error('未找到该版本的下载链接');
+      return;
+    }
+    setDownloadingVersion(release.version);
     setDownloading(true);
     try {
-      const success = await updateService.downloadAndInstallUpdate(url);
+      const success = await updateService.downloadAndInstallUpdate(exeAsset.url);
       if (success) {
-        toast.success('更新下载完成，请重启应用');
+        toast.success('下载完成，请重启应用');
       } else {
-        toast.error('更新下载失败');
+        toast.error('下载失败');
       }
     } catch (error) {
-      toast.error('更新失败');
+      toast.error('下载失败');
     } finally {
       setDownloading(false);
+      setDownloadingVersion(null);
     }
   };
 
@@ -346,102 +347,85 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* 自动更新设置 */}
+        {/* 版本管理 */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">自动更新</h2>
-          <p className="text-sm text-gray-500 mb-4">检查并更新快泛claw和OpenClaw-CN到最新版本</p>
-          
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">版本管理</h2>
+          <p className="text-sm text-gray-500 mb-4">从 GitHub 获取最新版本信息并下载</p>
+
           {/* 版本检查按钮 */}
-          <div className="mb-4">
-            <button
-              type="button"
-              onClick={() => void handleCheckVersion()}
-              disabled={checkingVersion}
-              className="w-full py-3 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {checkingVersion ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              {checkingVersion ? '检查中...' : '检查新版本'}
-            </button>
-          </div>
-          
-          {/* 版本信息和更新按钮 */}
-          <div className="space-y-4">
-            {/* 应用版本 */}
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <div className="font-medium text-gray-900">快泛claw</div>
-                <div className="text-sm">
-                  当前版本: <span className="font-medium">{currentAppVersion}</span>
-                  {appVersionInfo && appVersionInfo.latestVersion && (
-                    <span className="ml-2">
-                      最新版本: <span className={`font-medium ${appVersionInfo.hasUpdate ? 'text-green-600' : 'text-gray-600'}`}>{appVersionInfo.latestVersion}</span>
-                    </span>
-                  )}
-                </div>
-              </div>
-              {appVersionInfo && appVersionInfo.hasUpdate && (
-                <div className="mt-3 space-y-2">
-                  <div className="text-sm text-gray-600">
-                    <strong>更新内容:</strong>
-                    <pre className="whitespace-pre-wrap mt-1 text-xs">{appVersionInfo.changelog}</pre>
+          <button
+            type="button"
+            onClick={() => void handleCheckVersion()}
+            disabled={checkingVersion}
+            className="w-full py-3 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-2 mb-4"
+          >
+            {checkingVersion ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            {checkingVersion ? '检查中...' : '检查新版本'}
+          </button>
+
+          {/* 版本列表 */}
+          {recentReleases.length > 0 ? (
+            <div className="space-y-3">
+              {recentReleases.map((release) => {
+                const exeAsset = updateService.getExeAsset(release);
+                const isCurrentVersion = release.version === currentAppVersion;
+                const isDownloading = downloadingVersion === release.version;
+                return (
+                  <div key={release.tag_name} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-gray-900">v{release.version}</span>
+                        {release.is_latest && (
+                          <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">最新</span>
+                        )}
+                        {isCurrentVersion && (
+                          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">已安装</span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {new Date(release.published_at).toLocaleDateString('zh-CN')}
+                      </span>
+                    </div>
+                    <div className="text-sm text-gray-600 mb-3">
+                      {release.name || release.tag_name}
+                    </div>
+                    {exeAsset && (
+                      <button
+                        type="button"
+                        onClick={() => void handleDownloadVersion(release)}
+                        disabled={downloading || isCurrentVersion}
+                        className="w-full py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {isDownloading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            下载中...
+                          </>
+                        ) : isCurrentVersion ? (
+                          <>
+                            <CheckCircle className="w-4 h-4" />
+                            当前版本
+                          </>
+                        ) : (
+                          <>
+                            <Download className="w-4 h-4" />
+                            下载安装
+                          </>
+                        )}
+                      </button>
+                    )}
+                    {!exeAsset && (
+                      <div className="text-sm text-gray-400 text-center">无可用安装包</div>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleDownloadUpdate(appVersionInfo.downloadUrl)}
-                    disabled={downloading}
-                    className="w-full py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                    {downloading ? '下载中...' : '下载更新'}
-                  </button>
-                </div>
-              )}
-              {appVersionInfo && !appVersionInfo.hasUpdate && (
-                <div className="mt-3 flex items-center text-sm text-green-600">
-                  <CheckCircle className="w-4 h-4 mr-1" />
-                  当前已是最新版本
-                </div>
-              )}
+                );
+              })}
             </div>
-            
-            {/* OpenClaw版本 */}
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <div className="font-medium text-gray-900">OpenClaw-CN</div>
-                <div className="text-sm">
-                  当前版本: <span className="font-medium">1.0.0</span>
-                  {openClawVersionInfo && openClawVersionInfo.latestVersion && (
-                    <span className="ml-2">
-                      最新版本: <span className={`font-medium ${openClawVersionInfo.hasUpdate ? 'text-green-600' : 'text-gray-600'}`}>{openClawVersionInfo.latestVersion}</span>
-                    </span>
-                  )}
-                </div>
-              </div>
-              {openClawVersionInfo && openClawVersionInfo.hasUpdate && (
-                <div className="mt-3 space-y-2">
-                  <div className="text-sm text-gray-600">
-                    <strong>更新内容:</strong>
-                    <pre className="whitespace-pre-wrap mt-1 text-xs">{openClawVersionInfo.changelog}</pre>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleDownloadUpdate(openClawVersionInfo.downloadUrl)}
-                    disabled={downloading}
-                    className="w-full py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                    {downloading ? '下载中...' : '下载更新'}
-                  </button>
-                </div>
-              )}
-              {openClawVersionInfo && !openClawVersionInfo.hasUpdate && (
-                <div className="mt-3 flex items-center text-sm text-green-600">
-                  <CheckCircle className="w-4 h-4 mr-1" />
-                  当前已是最新版本
-                </div>
-              )}
+          ) : (
+            <div className="text-center text-gray-500 py-4">
+              点击上方按钮获取版本列表
             </div>
-          </div>
+          )}
         </div>
 
         {/* 安装向导 */}

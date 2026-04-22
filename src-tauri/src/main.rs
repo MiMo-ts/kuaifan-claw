@@ -630,6 +630,7 @@ fn main() {
             commands::system::open_url,
             commands::system::open_openclaw_config,
             commands::system::get_system_info,
+            commands::system::download_update,
             commands::usage::record_token_usage,
             commands::usage::get_token_usage_summary,
             commands::usage::get_token_usage_events,

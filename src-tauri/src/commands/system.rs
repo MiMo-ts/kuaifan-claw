@@ -152,6 +152,27 @@ pub async fn open_openclaw_config(
 }
 
 #[tauri::command]
+pub async fn download_update(url: String) -> Result<String, String> {
+    use hidden_cmd::cmd;
+
+    // 获取临时下载目录
+    let temp_dir = std::env::temp_dir();
+    let file_name = url.split('/').last().unwrap_or("update.exe");
+    let temp_path = temp_dir.join(file_name);
+
+    // 使用 curl 下载文件
+    #[cfg(windows)]
+    {
+        cmd()
+            .args(["/C", "curl", "-L", "-o", &temp_path.display().to_string(), &url])
+            .spawn()
+            .map_err(|e| format!("下载失败: {}", e))?;
+    }
+
+    Ok(format!("下载完成: {}", temp_path.display()))
+}
+
+#[tauri::command]
 pub async fn get_system_info() -> Result<SystemInfo, String> {
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().into_owned())
