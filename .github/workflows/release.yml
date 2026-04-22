@@ -38,11 +38,11 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
-          $configPath = "src-tauri/tauri.conf.json"
-          $config = Get-Content $configPath -Raw | ConvertFrom-Json
-          $config.version = $version
-          $config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+          $configPath = "${{ github.workspace }}/src-tauri/tauri.conf.json"
+          Write-Output "Before: $((Get-Content $configPath -Raw) -replace '.*"version":\s*"([^"]+)".*','$1')"
+          (Get-Content $configPath -Raw) -replace '"version":\s*"[^"]+"', "\"version\": `"$version`"" | Set-Content $configPath -Encoding UTF8 -NoNewline
           Write-Output "Updated version to $version"
+          Write-Output "After: $((Get-Content $configPath -Raw) -replace '.*"version":\s*"([^"]+)".*','$1')"
 
       - name: Copy bundled files to root
         shell: pwsh
