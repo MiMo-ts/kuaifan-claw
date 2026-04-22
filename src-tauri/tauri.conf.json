@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "快泛claw",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "identifier": "com.mimo.kuaifan-claw",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -13,7 +13,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM3MjFGMzVEQzJFQzdFOEEKUldTS2Z1ekNYZk1oeDhYNFRTa0xJcGNTd0tjWkdnR29XS3EvTUh5bVYybi9XdkJXWkJ2VllJakYK",
       "endpoints": [
-        "https://MiMo-ts.github.io/kuaifan-claw/latest.json"
+        "https://github.com/MiMo-ts/kuaifan-claw/releases/download/{{target}}/{{arch}}/{{current_version}}.json"
       ],
       "windows": {
         "installMode": "passive"

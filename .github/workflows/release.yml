@@ -34,6 +34,16 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      - name: Update version in tauri.conf.json
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $configPath = "src-tauri/tauri.conf.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $config.version = $version
+          $config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+          Write-Output "Updated version to $version"
+
       - name: Copy bundled files to root
         shell: pwsh
         working-directory: src-tauri
