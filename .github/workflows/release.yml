@@ -175,11 +175,26 @@ jobs:
 
       - name: Commit update-latest.json to main branch
         run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $apiUrl = "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}"
+          $headers = @{ "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}" }
+          $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+          $exeAsset = $release.assets | Where-Object { $_.name -match "x64-setup\.exe$" } | Select-Object -First 1
+          $exeName = $exeAsset.name
+          $json = @{
+            version = $version
+            notes = "快泛claw v$version 发布"
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = ""
+                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$exeName"
+              }
+            }
+          } | ConvertTo-Json -Depth 3
+          # Write directly to update-latest.json in the repo root
+          $json | Out-File -FilePath "update-latest.json" -Encoding UTF8 -NoNewline
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git checkout main
-          git pull origin main
-          cp "$env:GITHUB_WORKSPACE/update-latest.json" "./update-latest.json"
           git add "./update-latest.json"
           git commit -m "chore: update latest.json for ${{ github.ref_name }}"
           git push origin main
