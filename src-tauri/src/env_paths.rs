@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
 
+#[cfg(windows)]
+use crate::commands::hidden_cmd;
+
 /// 自包含工具根目录（data/env/）
 pub fn env_root(data_dir: &str) -> PathBuf {
     PathBuf::from(data_dir).join("env")
@@ -682,93 +685,123 @@ pub async fn git_clone_with_exe(
 
     let dest_str = dest.to_string_lossy().to_string();
 
-    let mut cmd = tokio::process::Command::new(git_path);
-    cmd.arg("clone").arg("--progress").arg("--depth").arg("1");
-    if let Some(b) = branch {
-        cmd.args(["-b", b]);
-    }
-    cmd.arg(url).arg(&dest_str);
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::piped());
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-
-    // Windows: 显式设 GIT_SSH_COMMAND 防止 ssh 密钥交互
+    // Windows: 使用 hidden_cmd 隐藏窗口
     #[cfg(windows)]
+    return {
+        // 构建完整的 git 命令（用于后续环境变量设置）
+        let git_clone_cmd = format!(
+            "git clone --progress --depth 1{} \"{}\" \"{}\"",
+            branch.map(|b| format!(" -b {}", b)).unwrap_or_default(),
+            url,
+            dest_str
+        );
+
+        let mut cmd = hidden_cmd::cmd();
+        cmd.arg("/C")
+            .arg(&git_clone_cmd)
+            .current_dir(&dest_str[..dest_str.rfind('\\').unwrap_or(0)])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=no");
+
+        let output = cmd
+            .output()
+            .map_err(|e| format!("启动 git clone 失败: {}", e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!(
+                "git clone 失败，请检查网络: {}",
+                stderr.trim()
+            ))
+        }
+    };
+
+    // 非 Windows: 使用 tokio::process::Command
+    #[cfg(not(windows))]
     {
-        cmd.env("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=no");
+        let mut cmd = tokio::process::Command::new(git_path);
+        cmd.arg("clone").arg("--progress").arg("--depth").arg("1");
+        if let Some(b) = branch {
+            cmd.args(["-b", b]);
+        }
+        cmd.arg(url).arg(&dest_str);
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::piped());
         cmd.env("GIT_TERMINAL_PROMPT", "0");
-    }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("启动 git clone 失败: {}", e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("启动 git clone 失败: {}", e))?;
 
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "无法读取 git stderr".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "无法读取 git stderr".to_string())?;
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    let app_hb = app.clone();
-    let stage_hb = stage.to_string();
-    let hb_task = tokio::spawn(async move {
-        let mut secs = 0u32;
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
-            if !r.load(Ordering::Relaxed) {
-                break;
-            }
-            secs += 20;
-            let _ = app_hb.emit(
-                "install-progress",
-                crate::mirror::InstallProgressEvent::detail(
-                    &stage_hb,
-                    &format!("克隆仍在进行（已约 {} 秒）…", secs),
-                ),
-            );
-        }
-    });
-
-    let app_clone = app.clone();
-    let stage_owned = stage.to_string();
-    let read_task = tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => break,
-                Ok(_) => {
-                    let t = line.trim();
-                    if !t.is_empty() {
-                        let _ = app_clone.emit(
-                            "install-progress",
-                            crate::mirror::InstallProgressEvent::detail(&stage_owned, t),
-                        );
-                    }
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
+        let app_hb = app.clone();
+        let stage_hb = stage.to_string();
+        let hb_task = tokio::spawn(async move {
+            let mut secs = 0u32;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                if !r.load(Ordering::Relaxed) {
+                    break;
                 }
-                Err(_) => break,
+                secs += 20;
+                let _ = app_hb.emit(
+                    "install-progress",
+                    crate::mirror::InstallProgressEvent::detail(
+                        &stage_hb,
+                        &format!("克隆仍在进行（已约 {} 秒）…", secs),
+                    ),
+                );
             }
+        });
+
+        let app_clone = app.clone();
+        let stage_owned = stage.to_string();
+        let read_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let t = line.trim();
+                        if !t.is_empty() {
+                            let _ = app_clone.emit(
+                                "install-progress",
+                                crate::mirror::InstallProgressEvent::detail(&stage_owned, t),
+                            );
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| format!("git clone 等待失败: {}", e))?;
+
+        let _ = read_task.await;
+        running.store(false, Ordering::Relaxed);
+        hb_task.abort();
+        let _ = hb_task.await;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "git clone 失败（退出码 {:?}），请检查网络",
+                status.code()
+            ))
         }
-    });
-
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("git clone 等待失败: {}", e))?;
-
-    let _ = read_task.await;
-    running.store(false, Ordering::Relaxed);
-    hb_task.abort();
-    let _ = hb_task.await;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "git clone 失败（退出码 {:?}），请检查网络",
-            status.code()
-        ))
     }
 }

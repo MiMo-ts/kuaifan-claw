@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import {
   Settings, FolderOpen, Database, RefreshCw, Play, Square,
-  ChevronRight, Plus, Bot, Plug, BarChart3, ArrowLeft, Monitor, Loader2, Download,
+  ChevronRight, Plus, Bot, Plug, BarChart3, ArrowLeft, Monitor, Loader2, Download, X,
 } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { checkForUpdate, downloadAndInstallUpdate, UpdateProgress } from '../utils/updater';
@@ -150,17 +150,38 @@ export default function HomePage() {
   const handleStartGateway = async () => {
     if (gatewayBusy) return;
     setGatewayBusy(true);
-    const tid = toast.loading(
-      '正在启动网关…（同步配置、通道插件自检、清端口、等监听。插件齐全时约 10～40 秒；若正在补全微信等插件的 npm/编译，首启可达数分钟，请查看 data/logs 或设置里网关日志）'
+    // 使用 custom toast 显示加载状态，带手动关闭按钮
+    const tid = toast.custom(
+      (t) => (
+        <div className={`flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 shadow-lg max-w-md ${t.visible ? 'animate-in' : 'animate-out'}`}>
+          <Loader2 className="w-5 h-5 text-blue-500 animate-spin shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm text-blue-800 font-medium">正在启动网关…</div>
+            <div className="text-xs text-blue-600 mt-0.5">
+              同步配置、通道插件自检、清端口、等监听。插件齐全时约 10～40 秒；若正在补全微信等插件的 npm/编译，首启可达数分钟。
+            </div>
+          </div>
+          <button
+            onClick={() => toast.dismiss(t.id)}
+            className="shrink-0 p-1 hover:bg-blue-100 rounded-lg transition-colors"
+            title="关闭提示"
+          >
+            <X className="w-4 h-4 text-blue-500" />
+          </button>
+        </div>
+      ),
+      { id: 'gateway-start', duration: Infinity }
     );
     try {
       const result = await invoke<string>('start_gateway');
       setGatewayRunning(true);
       setGatewayStatus(prev => (prev ? { ...prev, running: true } : null));
-      toast.success(result || '网关已启动', { id: tid, duration: 4000 });
+      toast.dismiss(tid);
+      toast.success(result || '网关已启动', { duration: 4000 });
       await loadData();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      toast.dismiss(tid);
       if (msg.includes('未配置默认大模型') || msg.includes('models.yaml')) {
         toast.error(
           <span>
@@ -173,10 +194,10 @@ export default function HomePage() {
               前往「大模型配置」→
             </button>
           </span>,
-          { id: tid, duration: 8000 }
+          { duration: 8000 }
         );
       } else {
-        toast.error(`启动失败：${msg}`, { id: tid, duration: 6000 });
+        toast.error(`启动失败：${msg}`, { duration: 6000 });
       }
       console.error('Start gateway error:', e);
     } finally {
@@ -187,16 +208,39 @@ export default function HomePage() {
   const handleStopGateway = async () => {
     if (gatewayBusy) return;
     setGatewayBusy(true);
-    const tid = toast.loading('正在停止网关…（结束进程并释放端口，约 1～5 秒）');
+    // 使用 custom toast 显示加载状态，带手动关闭按钮
+    const tid = toast.custom(
+      (t) => (
+        <div className={`flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 shadow-lg max-w-md ${t.visible ? 'animate-in' : 'animate-out'}`}>
+          <Loader2 className="w-5 h-5 text-amber-500 animate-spin shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm text-amber-800 font-medium">正在停止网关…</div>
+            <div className="text-xs text-amber-600 mt-0.5">
+              结束进程并释放端口，约 1～5 秒
+            </div>
+          </div>
+          <button
+            onClick={() => toast.dismiss(t.id)}
+            className="shrink-0 p-1 hover:bg-amber-100 rounded-lg transition-colors"
+            title="关闭提示"
+          >
+            <X className="w-4 h-4 text-amber-500" />
+          </button>
+        </div>
+      ),
+      { id: 'gateway-stop', duration: Infinity }
+    );
     try {
       const result = await invoke<string>('stop_gateway');
       setGatewayRunning(false);
       setGatewayStatus(prev => (prev ? { ...prev, running: false } : null));
-      toast.success(result || '网关已停止', { id: tid, duration: 4000 });
+      toast.dismiss(tid);
+      toast.success(result || '网关已停止', { duration: 4000 });
       await loadData();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      toast.error(`停止失败：${msg}`, { id: tid, duration: 6000 });
+      toast.dismiss(tid);
+      toast.error(`停止失败：${msg}`, { duration: 6000 });
       console.error('Stop gateway error:', e);
     } finally {
       setGatewayBusy(false);

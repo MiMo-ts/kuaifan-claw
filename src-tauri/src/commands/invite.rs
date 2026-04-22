@@ -40,6 +40,7 @@ fn get_machine_fingerprint_sync() -> String {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidateResult {
     pub valid: bool,
     pub already_bound: bool,

@@ -1102,118 +1102,166 @@ async fn git_clone_single(
 ) -> Result<(), String> {
     let dest_str = dest.to_string_lossy().to_string();
 
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.arg("clone").arg("--progress").arg("--depth").arg("1");
-    if let Some(b) = branch {
-        cmd.args(["-b", b]);
-    }
-    cmd.arg(url).arg(&dest_str);
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::piped());
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-    // git 内部网络超时，避免长时间挂在单个连接上
-    cmd.env("GIT_HTTP_TIMEOUT", "60");
-    // Windows 代理环境变量（curl 使用）
-    cmd.env(
-        "HTTPS_PROXY",
-        std::env::var("HTTPS_PROXY").unwrap_or_default(),
-    );
-    cmd.env(
-        "HTTP_PROXY",
-        std::env::var("HTTP_PROXY").unwrap_or_default(),
-    );
+    // Windows: 使用 hidden_cmd 隐藏窗口
+    #[cfg(windows)]
+    return {
+        use crate::commands::hidden_cmd;
 
-    let mut child = cmd
-        .spawn()
+        let branch_arg = branch.map(|b| format!(" -b {}", b)).unwrap_or_default();
+        let git_clone_cmd = format!(
+            "git clone --progress --depth 1{} \"{}\" \"{}\"",
+            branch_arg, url, dest_str
+        );
+
+        let mut cmd = hidden_cmd::cmd();
+        cmd.arg("/C")
+            .arg(&git_clone_cmd)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_HTTP_TIMEOUT", "60")
+            .env(
+                "HTTPS_PROXY",
+                std::env::var("HTTPS_PROXY").unwrap_or_default(),
+            )
+            .env(
+                "HTTP_PROXY",
+                std::env::var("HTTP_PROXY").unwrap_or_default(),
+            );
+
+        // Windows 上 git clone 可能比较慢，用 tokio::task::spawn_blocking 执行
+        let output = tokio::task::spawn_blocking(move || {
+            cmd.output()
+        })
+        .await
+        .map_err(|e| format!("git clone 执行失败: {}", e))?
         .map_err(|e| format!("启动 git clone 失败: {}", e))?;
 
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "无法读取 git stderr".to_string())?;
-
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    let app_hb = app.clone();
-    let stage_hb = stage.to_string();
-    let hb_task = tokio::spawn(async move {
-        let mut secs = 0u32;
-        loop {
-            tokio::time::sleep(Duration::from_secs(15)).await;
-            if !r.load(Ordering::Relaxed) {
-                break;
-            }
-            secs += 15;
-            emit_progress(
-                &app_hb,
-                InstallProgressEvent::detail(
-                    &stage_hb,
-                    &format!("克隆仍在进行（已约 {} 秒，Git 可能暂无新输出）…", secs),
-                ),
-            );
-        }
-    });
-
-    let app_clone = app.clone();
-    let stage_owned = stage.to_string();
-    // 用 read_buf 读原始字节，手动维护行缓冲，避免 read_line 碰到无 \n 的行永久阻塞
-    let read_task = tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr);
-        let mut buf = vec![0u8; 4096];
-        let mut line_buf = Vec::new();
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    for &byte in &buf[..n] {
-                        line_buf.push(byte);
-                        if byte == b'\n' {
-                            if let Ok(line) = String::from_utf8(line_buf.clone()) {
-                                let t = line.trim();
-                                if !t.is_empty() {
-                                    emit_progress(
-                                        &app_clone,
-                                        InstallProgressEvent::detail(&stage_owned, t),
-                                    );
-                                }
-                            }
-                            line_buf.clear();
-                        }
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    // 全局 120s 超时，防止所有镜像都重试后仍然永久挂死
-    let timeout_result = tokio::time::timeout(Duration::from_secs(120), child.wait()).await;
-
-    let _ = read_task.await;
-    running.store(false, Ordering::Relaxed);
-    hb_task.abort();
-    let _ = hb_task.await;
-
-    let status = match timeout_result {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => return Err(format!("git clone 进程等待失败: {}", e)),
-        Err(_) => {
-            // 超时，杀掉子进程
-            let _ = child.kill().await;
-            return Err(format!(
-                "克隆超时（120 秒），请检查网络或手动克隆。镜像 URL: {}",
-                url
-            ));
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!(
+                "git clone 失败，请检查网络: {}",
+                stderr.trim()
+            ))
         }
     };
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "git clone 失败（退出码 {:?}），请查看上方实时输出或检查网络",
-            status.code()
-        ))
+    // 非 Windows: 使用 tokio::process::Command
+    #[cfg(not(windows))]
+    {
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.arg("clone").arg("--progress").arg("--depth").arg("1");
+        if let Some(b) = branch {
+            cmd.args(["-b", b]);
+        }
+        cmd.arg(url).arg(&dest_str);
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::piped());
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        // git 内部网络超时，避免长时间挂在单个连接上
+        cmd.env("GIT_HTTP_TIMEOUT", "60");
+        // Windows 代理环境变量（curl 使用）
+        cmd.env(
+            "HTTPS_PROXY",
+            std::env::var("HTTPS_PROXY").unwrap_or_default(),
+        );
+        cmd.env(
+            "HTTP_PROXY",
+            std::env::var("HTTP_PROXY").unwrap_or_default(),
+        );
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("启动 git clone 失败: {}", e))?;
+
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "无法读取 git stderr".to_string())?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
+        let app_hb = app.clone();
+        let stage_hb = stage.to_string();
+        let hb_task = tokio::spawn(async move {
+            let mut secs = 0u32;
+            loop {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                if !r.load(Ordering::Relaxed) {
+                    break;
+                }
+                secs += 15;
+                emit_progress(
+                    &app_hb,
+                    InstallProgressEvent::detail(
+                        &stage_hb,
+                        &format!("克隆仍在进行（已约 {} 秒，Git 可能暂无新输出）…", secs),
+                    ),
+                );
+            }
+        });
+
+        let app_clone = app.clone();
+        let stage_owned = stage.to_string();
+        // 用 read_buf 读原始字节，手动维护行缓冲，避免 read_line 碰到无 \n 的行永久阻塞
+        let read_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr);
+            let mut buf = vec![0u8; 4096];
+            let mut line_buf = Vec::new();
+            loop {
+                match reader.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        for &byte in &buf[..n] {
+                            line_buf.push(byte);
+                            if byte == b'\n' {
+                                if let Ok(line) = String::from_utf8(line_buf.clone()) {
+                                    let t = line.trim();
+                                    if !t.is_empty() {
+                                        emit_progress(
+                                            &app_clone,
+                                            InstallProgressEvent::detail(&stage_owned, t),
+                                        );
+                                    }
+                                }
+                                line_buf.clear();
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // 全局 120s 超时，防止所有镜像都重试后仍然永久挂死
+        let timeout_result = tokio::time::timeout(Duration::from_secs(120), child.wait()).await;
+
+        let _ = read_task.await;
+        running.store(false, Ordering::Relaxed);
+        hb_task.abort();
+        let _ = hb_task.await;
+
+        let status = match timeout_result {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(format!("git clone 进程等待失败: {}", e)),
+            Err(_) => {
+                // 超时，杀掉子进程
+                let _ = child.kill().await;
+                return Err(format!(
+                    "克隆超时（120 秒），请检查网络或手动克隆。镜像 URL: {}",
+                    url
+                ));
+            }
+        };
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "git clone 失败（退出码 {:?}），请查看上方实时输出或检查网络",
+                status.code()
+            ))
+        }
     }
 }
 
