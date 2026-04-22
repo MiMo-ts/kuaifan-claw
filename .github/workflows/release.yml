@@ -111,17 +111,22 @@ jobs:
       - name: Create update JSON
         shell: pwsh
         run: |
-          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
-          $sigFile = [System.IO.Path]::ChangeExtension($exe.FullName, ".sig")
-          $signature = if (Test-Path $sigFile) { Get-Content $sigFile -Raw } else { "" }
+          # 从 release assets 获取实际的文件名
           $version = "${{ github.ref_name }}".TrimStart('v')
+          $apiUrl = "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}"
+          $headers = @{ "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}" }
+          $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+          $exeAsset = $release.assets | Where-Object { $_.name -match "x64-setup\.exe$" } | Select-Object -First 1
+          $exeName = $exeAsset.name
+          $sigFile = "src-tauri/target/release/bundle/nsis/$exeName.sig"
+          $signature = if (Test-Path $sigFile) { Get-Content $sigFile -Raw } else { "" }
           $json = @{
             version = $version
             notes = "快泛claw v$version 发布"
             platforms = @{
               "windows-x86_64" = @{
                 signature = $signature.Trim()
-                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($exe.Name)"
+                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$exeName"
               }
             }
           } | ConvertTo-Json -Depth 3
@@ -138,17 +143,21 @@ jobs:
       - name: Deploy latest.json to GitHub Pages
         run: |
           mkdir -Force $env:GITHUB_WORKSPACE/pages
-          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
-          $sigFile = [System.IO.Path]::ChangeExtension($exe.FullName, ".sig")
-          $signature = if (Test-Path $sigFile) { Get-Content $sigFile -Raw } else { "" }
           $version = "${{ github.ref_name }}".TrimStart('v')
+          $apiUrl = "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}"
+          $headers = @{ "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}" }
+          $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+          $exeAsset = $release.assets | Where-Object { $_.name -match "x64-setup\.exe$" } | Select-Object -First 1
+          $exeName = $exeAsset.name
+          $sigFile = "src-tauri/target/release/bundle/nsis/$exeName.sig"
+          $signature = if (Test-Path $sigFile) { Get-Content $sigFile -Raw } else { "" }
           $json = @{
             version = $version
             notes = "快泛claw v$version 发布"
             platforms = @{
               "windows-x86_64" = @{
                 signature = $signature.Trim()
-                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($exe.Name)"
+                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$exeName"
               }
             }
           } | ConvertTo-Json -Depth 3
