@@ -163,6 +163,8 @@ jobs:
             }
           } | ConvertTo-Json -Depth 3
           $json | Out-File -FilePath "$env:GITHUB_WORKSPACE/pages/latest.json" -Encoding UTF8
+          # Also create update-latest.json in workspace for main branch commit
+          $json | Out-File -FilePath "$env:GITHUB_WORKSPACE/update-latest.json" -Encoding UTF8
 
       - name: Upload to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
@@ -170,3 +172,14 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: pages
           publish_branch: gh-pages
+
+      - name: Commit update-latest.json to main branch
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git checkout main
+          git pull origin main
+          cp "$env:GITHUB_WORKSPACE/update-latest.json" "./update-latest.json"
+          git add "./update-latest.json"
+          git commit -m "chore: update latest.json for ${{ github.ref_name }}"
+          git push origin main
