@@ -45,6 +45,13 @@ jobs:
           Write-Output "Updated version to $version"
           Get-Content $configPath | Select-String "version"
 
+      - name: Commit tauri.conf.json version update
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add "src-tauri/tauri.conf.json"
+          git commit -m "chore: bump version to ${{ github.ref_name }}"
+
       - name: Copy bundled files to root
         shell: pwsh
         working-directory: src-tauri
