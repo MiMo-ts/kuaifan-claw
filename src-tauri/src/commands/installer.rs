@@ -97,7 +97,8 @@ pub async fn install_node(
     let dest = env_dir.join("node");
 
     // ── 1. 检测系统 Node.js ─────────────────────────────────
-    if let Ok(output) = Command::new("node").arg("--version").output() {
+    #[cfg(windows)]
+    if let Ok(output) = hidden_cmd::cmd().arg("/C").arg("node").arg("--version").output() {
         if output.status.success() {
             let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
             emit(
@@ -111,17 +112,36 @@ pub async fn install_node(
     // ── 2. 检测内置 Node.js ─────────────────────────────────
     if node_exe(&env_dir).exists() {
         let node_v = node_exe(&env_dir);
-        if let Ok(output) = Command::new(&node_v).arg("--version").output() {
-            if output.status.success() {
-                let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                emit(
-                    &app,
-                    InstallProgressEvent::finished(
-                        "node",
-                        &format!("使用内置 Node.js（{}）", v),
-                    ),
-                );
-                return Ok(format!("Node.js 已安装（内置）：{}", v));
+        #[cfg(windows)]
+        {
+            if let Ok(output) = hidden_cmd::cmd().arg("/C").arg(&node_v).arg("--version").output() {
+                if output.status.success() {
+                    let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    emit(
+                        &app,
+                        InstallProgressEvent::finished(
+                            "node",
+                            &format!("使用内置 Node.js（{}）", v),
+                        ),
+                    );
+                    return Ok(format!("Node.js 已安装（内置）：{}", v));
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if let Ok(output) = Command::new(&node_v).arg("--version").output() {
+                if output.status.success() {
+                    let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    emit(
+                        &app,
+                        InstallProgressEvent::finished(
+                            "node",
+                            &format!("使用内置 Node.js（{}）", v),
+                        ),
+                    );
+                    return Ok(format!("Node.js 已安装（内置）：{}", v));
+                }
             }
         }
         // 内置版本损坏，清理
@@ -173,6 +193,18 @@ pub async fn install_node(
             return Err(msg);
         }
 
+        #[cfg(windows)]
+        let v_out = hidden_cmd::cmd().arg("/C").arg(&node_v).arg("--version")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        #[cfg(not(windows))]
+        #[cfg(windows)]
+        let v_out = hidden_cmd::cmd().arg("/C").arg(&node_v).arg("--version")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        #[cfg(not(windows))]
         let v_out = Command::new(&node_v)
             .arg("--version")
             .output()
@@ -260,6 +292,12 @@ pub async fn install_node(
         }
 
         let node_v = node_exe(&env_dir);
+        #[cfg(windows)]
+        let v_out = hidden_cmd::cmd().arg("/C").arg(&node_v).arg("--version")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        #[cfg(not(windows))]
         let v_out = Command::new(&node_v)
             .arg("--version")
             .output()
@@ -320,6 +358,12 @@ pub async fn install_node(
         tokio::fs::remove_file(&tar_path).await.ok();
 
         let node_v = node_exe(&env_dir);
+        #[cfg(windows)]
+        let v_out = hidden_cmd::cmd().arg("/C").arg(&node_v).arg("--version")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        #[cfg(not(windows))]
         let v_out = Command::new(&node_v)
             .arg("--version")
             .output()
@@ -507,22 +551,48 @@ pub async fn install_git(
     let dest = env_dir.join("git");
 
     // ── 1. 检测系统 Git ─────────────────────────────────
-    if let Ok(output) = Command::new("git").arg("--version").output() {
-        if output.status.success() {
-            let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            emit(&app, InstallProgressEvent::finished("git", &format!("使用系统 Git（{}）", v)));
-            return Ok(format!("Git 已安装（系统）：{}", v));
+    #[cfg(windows)]
+    {
+        if let Ok(output) = hidden_cmd::cmd().arg("/C").arg("git").arg("--version").output() {
+            if output.status.success() {
+                let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                emit(&app, InstallProgressEvent::finished("git", &format!("使用系统 Git（{}）", v)));
+                return Ok(format!("Git 已安装（系统）：{}", v));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(output) = Command::new("git").arg("--version").output() {
+            if output.status.success() {
+                let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                emit(&app, InstallProgressEvent::finished("git", &format!("使用系统 Git（{}）", v)));
+                return Ok(format!("Git 已安装（系统）：{}", v));
+            }
         }
     }
 
     // ── 2. 检测内置 Git ─────────────────────────────────
     if git_exists(&env_dir) {
         let git_v = git_exe(&env_dir);
-        if let Ok(output) = Command::new(&git_v).arg("--version").output() {
-            if output.status.success() {
-                let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                emit(&app, InstallProgressEvent::finished("git", &format!("使用内置 Git（{}）", v)));
-                return Ok(format!("Git 已安装（内置）：{}", v));
+        #[cfg(windows)]
+        {
+            if let Ok(output) = hidden_cmd::cmd().arg("/C").arg(&git_v).arg("--version").output() {
+                if output.status.success() {
+                    let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    emit(&app, InstallProgressEvent::finished("git", &format!("使用内置 Git（{}）", v)));
+                    return Ok(format!("Git 已安装（内置）：{}", v));
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if let Ok(output) = Command::new(&git_v).arg("--version").output() {
+                if output.status.success() {
+                    let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    emit(&app, InstallProgressEvent::finished("git", &format!("使用内置 Git（{}）", v)));
+                    return Ok(format!("Git 已安装（内置）：{}", v));
+                }
             }
         }
         // 内置版本损坏，清理
@@ -564,6 +634,12 @@ pub async fn install_git(
         unzip(&zip_path, &dest).await?;
 
         let git_v = git_exe(&env_dir);
+        #[cfg(windows)]
+        let v_out = hidden_cmd::cmd().arg("/C").arg(&git_v).arg("--version")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        #[cfg(not(windows))]
         let v_out = Command::new(&git_v)
             .arg("--version")
             .output()
@@ -1066,12 +1142,24 @@ fn resolve_npm_exe_with_version(
 
     let npm_cli = npm_cli_js_next_to_node(&node_path);
 
+    #[cfg(windows)]
+    let node_version = hidden_cmd::cmd().arg("/C").arg(&node_path).arg("--version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    #[cfg(not(windows))]
     let node_version = Command::new(&node_path)
         .arg("--version")
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
 
+    #[cfg(windows)]
+    let npm_version = hidden_cmd::cmd().arg("/C").arg(&npm_path).arg("--version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    #[cfg(not(windows))]
     let npm_version = Command::new(&npm_path)
         .arg("--version")
         .output()
@@ -1432,13 +1520,20 @@ fn fetch_openclaw_via_npm_pack_blocking(
         pack_dest_str.as_str(),
     ];
 
+    #[cfg(windows)]
+    let mut cmd: Command = if let Some(ref cli) = npm_cli {
+        let mut c = hidden_cmd::cmd();
+        c.arg("/C").arg(&node_exe).arg(cli).args(pack_args);
+        c
+    } else {
+        let mut c = hidden_cmd::cmd();
+        c.args(["/C", &npm_cmd.to_string_lossy()]).args(pack_args);
+        c
+    };
+    #[cfg(not(windows))]
     let mut cmd: Command = if let Some(ref cli) = npm_cli {
         let mut c = Command::new(&node_exe);
         c.arg(cli).args(pack_args);
-        c
-    } else if cfg!(windows) {
-        let mut c = hidden_cmd::cmd();
-        c.args(["/C"]).arg(&npm_cmd).args(pack_args);
         c
     } else {
         let mut c = Command::new(&npm_cmd);

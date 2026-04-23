@@ -46,6 +46,7 @@ const InviteCodePage = () => {
         const event = new CustomEvent('inviteCodeValidated', {
           detail: { validated: true }
         });
+        console.log('[InviteCodePage] Dispatching inviteCodeValidated event');
         window.dispatchEvent(event);
 
         toast.success(result.message || '邀请码验证成功');
@@ -87,6 +88,12 @@ const InviteCodePage = () => {
           <p className="mt-2 text-sm text-gray-200">
             请输入从代理平台获取的邀请码
           </p>
+          {/* 提示信息 */}
+          <div className="mt-4 p-3 bg-yellow-500/20 border border-yellow-500/40 rounded-lg text-left">
+            <p className="text-yellow-200 text-xs">
+              <strong>提示：</strong>完成验证后可使用快泛claw完整功能。每个邀请码可绑定有限数量的设备。
+            </p>
+          </div>
         </div>
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>

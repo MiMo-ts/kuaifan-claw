@@ -167,6 +167,15 @@ fn find_bundled_git(_data_dir: &str) -> Option<PathBuf> {
 /// 返回 (path, is_system) 其中 is_system=true 表示来自系统 PATH
 pub fn resolve_node(data_dir: &str) -> (PathBuf, bool) {
     // 第一优先：系统 PATH 中的 node
+    #[cfg(windows)]
+    if hidden_cmd::cmd().arg("/C").arg("node").arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return (PathBuf::from("node"), true);
+    }
+    #[cfg(not(windows))]
     if Command::new("node")
         .arg("--version")
         .output()
@@ -187,6 +196,16 @@ pub fn resolve_node(data_dir: &str) -> (PathBuf, bool) {
         for p in &homebrew_paths {
             let node_path = Path::new(p);
             if node_path.is_file() {
+                #[cfg(windows)]
+                if hidden_cmd::cmd().arg("/C").arg(p).arg("--version")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
+                    tracing::info!("找到 Homebrew Node.js: {}", p);
+                    return (PathBuf::from(p), true);
+                }
+                #[cfg(not(windows))]
                 if Command::new(p)
                     .arg("--version")
                     .output()
@@ -234,6 +253,15 @@ pub fn resolve_node_bin_dir_for_path(data_dir: &str) -> Option<PathBuf> {
 /// 返回 (path, is_system) 其中 is_system=true 表示来自系统 PATH
 pub fn resolve_git(data_dir: &str) -> (PathBuf, bool) {
     // 第一优先：系统 PATH 中的 git
+    #[cfg(windows)]
+    if hidden_cmd::cmd().arg("/C").arg("git").arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return (PathBuf::from("git"), true);
+    }
+    #[cfg(not(windows))]
     if Command::new("git")
         .arg("--version")
         .output()
@@ -254,6 +282,16 @@ pub fn resolve_git(data_dir: &str) -> (PathBuf, bool) {
         for p in &homebrew_git_paths {
             let git_path = Path::new(p);
             if git_path.is_file() {
+                #[cfg(windows)]
+                if hidden_cmd::cmd().arg("/C").arg(p).arg("--version")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
+                    tracing::info!("找到 Homebrew Git: {}", p);
+                    return (PathBuf::from(p), true);
+                }
+                #[cfg(not(windows))]
                 if Command::new(p)
                     .arg("--version")
                     .output()
