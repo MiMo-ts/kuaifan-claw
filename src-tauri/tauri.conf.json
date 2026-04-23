@@ -11,7 +11,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM3MjFGMzVEQzJFQzdFOEEKUldTS2Z1ekNYZk1oeDhYNFRTa0xJcGNTd0tjWkdnR29XS3EvTUh5bVYybi9XdkJXWkJ2VllJakYK",
+      "pubkey": "MCowBQYDK2VwAyEAvloDA/biTRwOvmeMxc0wfRzf+6S09nHIjLtwO00mPp4=",
       "endpoints": [
         "https://raw.githubusercontent.com/MiMo-ts/kuaifan-claw/main/update-latest.json"
       ],
