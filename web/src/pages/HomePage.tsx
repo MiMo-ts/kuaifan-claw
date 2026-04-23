@@ -33,7 +33,6 @@ export default function HomePage() {
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dataDir, setDataDir] = useState<string>('');
   const [hydrated, setHydrated] = useState(false);
   const [defaultModel, setDefaultModel] = useState<{provider?: string; model_name?: string} | null>(null);
   /** 启动/停止网关进行中，避免重复点击并配合 Toast 提示 */
@@ -55,28 +54,13 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    invoke<string>('get_data_dir').then(d => setDataDir(d)).catch(() => {});
-  }, []);
-
-  useEffect(() => {
     if (!hydrated) return;
     if (!wizardCompleted) {
       navigate('/', { replace: true });
       return;
     }
-    // 检查邀请码是否已验证
-    if (dataDir) {
-      invoke<boolean>('is_invite_code_validated', { dataDir })
-        .then(valid => {
-          if (!valid) {
-            navigate('/invite-code', { replace: true });
-          } else {
-            loadData();
-          }
-        })
-        .catch(() => loadData());
-    }
-  }, [hydrated, wizardCompleted, navigate, dataDir]);
+    loadData();
+  }, [hydrated, wizardCompleted, navigate]);
 
   /** 网关进程崩溃或端口被占后，状态文件可能仍显示「运行中」；定时探测 TCP 与状态文件，避免界面长期不同步 */
   useEffect(() => {
