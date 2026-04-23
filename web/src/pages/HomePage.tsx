@@ -64,8 +64,19 @@ export default function HomePage() {
       navigate('/', { replace: true });
       return;
     }
-    loadData();
-  }, [hydrated, wizardCompleted, navigate]);
+    // 检查邀请码是否已验证
+    if (dataDir) {
+      invoke<boolean>('is_invite_code_validated', { dataDir })
+        .then(valid => {
+          if (!valid) {
+            navigate('/invite-code', { replace: true });
+          } else {
+            loadData();
+          }
+        })
+        .catch(() => loadData());
+    }
+  }, [hydrated, wizardCompleted, navigate, dataDir]);
 
   /** 网关进程崩溃或端口被占后，状态文件可能仍显示「运行中」；定时探测 TCP 与状态文件，避免界面长期不同步 */
   useEffect(() => {

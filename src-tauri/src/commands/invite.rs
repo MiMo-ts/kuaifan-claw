@@ -113,3 +113,10 @@ pub async fn validate_and_bind_invite_code(
 
     Ok(result)
 }
+
+/// 检查邀请码是否已验证
+#[command]
+pub async fn is_invite_code_validated(data_dir: String) -> Result<bool, String> {
+    let data_path = PathBuf::from(&data_dir);
+    crate::services::invite_code::is_invite_code_validated(&data_path)
+}

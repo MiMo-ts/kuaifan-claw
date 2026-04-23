@@ -52,7 +52,7 @@ function WizardOrSetup() {
 }
 
 function App() {
-  const { initialized, setInitialized } = useAppStore();
+  const { initialized, setInitialized, wizardCompleted } = useAppStore();
   const [inviteCodeValidated, setInviteCodeValidated] = useState(false);
   const [checkingInviteCode, setCheckingInviteCode] = useState(true);
 
@@ -63,13 +63,19 @@ function App() {
         console.log('Data directory:', dataDir);
         console.log('检查邀请码状态');
 
-        // 从本地存储中读取邀请码验证状态
+        // 通过 Rust 命令检查邀请码是否已验证
+        const isValid = await invoke<boolean>('is_invite_code_validated', { dataDir });
+        setInviteCodeValidated(isValid);
+        if (isValid) {
+          localStorage.setItem('inviteCodeValidated', 'true');
+        }
+      } catch (e) {
+        console.error('Init error:', e);
+        // 检查本地存储作为后备
         const storedStatus = localStorage.getItem('inviteCodeValidated');
         if (storedStatus === 'true') {
           setInviteCodeValidated(true);
         }
-      } catch (e) {
-        console.error('Init error:', e);
       } finally {
         setCheckingInviteCode(false);
         setInitialized(true);
@@ -103,8 +109,8 @@ function App() {
     );
   }
 
-  // 如果邀请码未验证，显示邀请码验证页面
-  if (!inviteCodeValidated) {
+  // 如果向导已完成但邀请码未验证，显示邀请码验证页面
+  if (wizardCompleted && !inviteCodeValidated) {
     return <InviteCodePage />;
   }
 

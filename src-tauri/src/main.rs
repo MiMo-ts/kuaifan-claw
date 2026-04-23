@@ -661,6 +661,7 @@ fn main() {
             // 邀请码验证
             commands::invite::get_machine_fingerprint,
             commands::invite::validate_and_bind_invite_code,
+            commands::invite::is_invite_code_validated,
         ])
         .setup(|app| {
             tracing::info!("Tauri 应用初始化完成");
