@@ -189,27 +189,19 @@ export default function SettingsPage() {
     }
   };
 
-  // 下载指定版本
+  // 下载指定版本 - 跳转到浏览器下载
   const handleDownloadVersion = async (release: ReleaseInfo) => {
     const exeAsset = updateService.getExeAsset(release);
     if (!exeAsset) {
       toast.error('未找到该版本的下载链接');
       return;
     }
-    setDownloadingVersion(release.version);
-    setDownloading(true);
+    // 调用 Rust 后端打开浏览器下载
     try {
-      const success = await updateService.downloadAndInstallUpdate(exeAsset.url);
-      if (success) {
-        toast.success('下载完成，请重启应用');
-      } else {
-        toast.error('下载失败');
-      }
+      await invoke('open_url', { url: exeAsset.url });
     } catch (error) {
-      toast.error('下载失败');
-    } finally {
-      setDownloading(false);
-      setDownloadingVersion(null);
+      // 如果后端打开失败，尝试前端直接跳转
+      window.open(exeAsset.url, '_blank');
     }
   };
 
@@ -393,15 +385,10 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={() => void handleDownloadVersion(release)}
-                        disabled={downloading || isCurrentVersion}
+                        disabled={isCurrentVersion}
                         className="w-full py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                       >
-                        {isDownloading ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            下载中...
-                          </>
-                        ) : isCurrentVersion ? (
+                        {isCurrentVersion ? (
                           <>
                             <CheckCircle className="w-4 h-4" />
                             当前版本
@@ -409,7 +396,7 @@ export default function SettingsPage() {
                         ) : (
                           <>
                             <Download className="w-4 h-4" />
-                            下载安装
+                            浏览器下载
                           </>
                         )}
                       </button>
