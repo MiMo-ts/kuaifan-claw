@@ -1,0 +1,158 @@
+# 修复归档文档 - 2026-04-23
+
+## 一、问题描述
+
+### 1.1 版本同步问题
+- 应用内版本号始终显示 1.0.23，无法同步到 GitHub release 版本
+- 原因：tauri.conf.json 版本未在构建时更新
+
+### 1.2 自动更新不可用
+- 已安装客户端无法检测到新版本
+- check() 函数无法正确获取版本信息
+
+### 1.3 版本检查逻辑问题
+- 原版本检查依赖 http://localhost:3001/api（本地服务）
+- 需要直接调用 GitHub API 获取版本信息
+
+## 二、已完成的修复
+
+### 2.1 Workflow 修复
+
+**文件：** `.github/workflows/release.yml`
+
+**修改内容：**
+1. 添加 "Commit tauri.conf.json version update" 步骤
+2. 在构建后提交 tauri.conf.json 的版本更改到 main 分支
+
+```yaml
+- name: Commit tauri.conf.json version update
+  run: |
+    git config --local user.email "github-actions[bot]@users.noreply.github.com"
+    git config --local user.name "github-actions[bot]"
+    git add "src-tauri/tauri.conf.json"
+    git commit -m "chore: bump version to ${{ github.ref_name }}"
+```
+
+**目的：** 确保每次发布 tag 时，tauri.conf.json 版本同步更新
+
+### 2.2 版本检查逻辑重写
+
+**文件：** `web/src/services/updateService.ts`
+
+**修改内容：**
+1. 移除对本地 API 的依赖
+2. 直接调用 GitHub API 获取版本信息
+
+**新增功能：**
+- `fetchLatestVersion()` - 获取最新版本信息
+- `fetchRecentReleases(count)` - 获取最近 N 个版本
+- `getExeAsset(release)` - 提取可下载的 exe 资源
+
+```typescript
+// GitHub API 配置
+const GITHUB_API = 'https://api.github.com';
+const OWNER = 'MiMo-ts';
+const REPO = 'kuaifan-claw';
+
+// 新增接口
+async fetchRecentReleases(count: number = 3): Promise<ReleaseInfo[]>
+getExeAsset(release: ReleaseInfo): { name: string; url: string } | null
+```
+
+### 2.3 设置页面 UI 改造
+
+**文件：** `web/src/pages/SettingsPage.tsx`
+
+**修改内容：**
+1. 版本模块从"自动更新"改为"版本管理"
+2. 点击"检查新版本"从 GitHub 获取最新3个版本
+3. 版本列表展示：版本号、发布日期、下载按钮
+4. 标记"最新"和"已安装"状态
+5. 点击"浏览器下载"跳转到 GitHub release 页面下载
+
+**新增状态：**
+```typescript
+const [recentReleases, setRecentReleases] = useState<ReleaseInfo[]>([]);
+const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null);
+```
+
+**新增函数：**
+```typescript
+handleCheckVersion() // 从 GitHub 获取版本列表
+handleDownloadVersion(release) // 跳转到浏览器下载
+```
+
+### 2.4 后端下载命令
+
+**文件：** `src-tauri/src/commands/system.rs`
+
+**新增命令：**
+```rust
+#[tauri::command]
+pub async fn download_update(url: String) -> Result<String, String>
+```
+
+**功能：** 使用 curl 下载更新文件（备用方案，主要使用浏览器下载）
+
+### 2.5 命令注册
+
+**文件：** `src-tauri/src/main.rs`
+
+**新增注册：**
+```rust
+commands::system::download_update,
+```
+
+## 三、当前状态
+
+### 3.1 已推送版本
+- v1.0.35 - workflow 修复
+- v1.0.36 - 版本更新模块重写
+- v1.0.37 - 浏览器下载功能
+
+### 3.2 本地构建
+- 36 版本构建成功
+- exe 文件位于：`src-tauri/target/release/快泛claw.exe`
+
+### 3.3 待修复问题
+- signature 签名验证未实现（详见 docs/UPDATE_ARCHITECTURE.md）
+- update-latest.json 中 signature 字段为空
+
+## 四、GitHub API 链接
+
+```
+# 获取最新3个版本
+https://api.github.com/repos/MiMo-ts/kuaifan-claw/releases?per_page=3
+
+# 获取最新版本详情
+https://api.github.com/repos/MiMo-ts/kuaifan-claw/releases/latest
+
+# update-latest.json
+https://raw.githubusercontent.com/MiMo-ts/kuaifan-claw/main/update-latest.json
+```
+
+## 五、测试步骤
+
+1. 安装 36 版本
+2. 打开应用 → 设置 → 版本管理
+3. 点击"检查新版本"
+4. 应显示 37、36、35 版本列表
+5. 点击"浏览器下载"应跳转到 GitHub 下载页面
+
+## 六、后续计划
+
+1. 修复 workflow 中的签名步骤顺序
+2. 实现 .sig 签名文件生成
+3. 验证 signature 不为空
+4. 测试内置更新流程（带签名验证）
+
+## 七、修改文件清单
+
+| 文件路径 | 修改类型 | 说明 |
+|----------|----------|------|
+| .github/workflows/release.yml | 修改 | 添加版本提交步骤 |
+| web/src/services/updateService.ts | 重写 | 改为 GitHub API |
+| web/src/pages/SettingsPage.tsx | 修改 | 版本管理 UI |
+| src-tauri/src/commands/system.rs | 新增 | download_update 命令 |
+| src-tauri/src/main.rs | 修改 | 注册新命令 |
+| docs/UPDATE_ARCHITECTURE.md | 新增 | 更新架构文档 |
