@@ -1,0 +1,22 @@
+// 命令模块
+pub mod backup;
+pub mod config;
+pub mod env;
+pub mod feishu_wizard;
+pub mod gateway;
+pub mod gateway_tests;
+pub mod gateway_ws;
+pub mod hidden_cmd;
+pub mod installer;
+pub mod instance;
+pub mod invite;
+pub mod log;
+pub mod model;
+pub mod monitoring;
+pub mod plugin;
+pub mod plugin_framework;
+pub mod robot;
+pub mod system;
+pub mod usage;
+pub mod auth;
+pub mod token;

@@ -1,0 +1,191 @@
+# Skills 环境配置清单
+# 定义每个 skill 的运行时环境依赖，支持预编译离线包构建
+#
+# 目录位置: d:\ORD\skills-environments.yaml
+# 构建脚本: scripts\build-skills-env.bat
+# 安装脚本: scripts\install-skill-env.bat
+#
+# ┌─────────────────────────────────────────────────────────────┐
+# │ 设计说明                                                    │
+# │                                                            │
+# │ Python skill 环境使用 uv 自包含运行时（内置 Python）。       │
+# │ uv 本身是单文件可执行文件，无需安装。                       │
+# │ 预编译后：.venv + uv.exe + uv.lock → 离线可用              │
+# │                                                            │
+# │ 目录结构（预编译包解压后）:                                 │
+# │   skills-env/                                             │
+# │   ├── uv.exe                   ← uv 独立可执行文件         │
+# │   ├── .packages/               ← uv 包缓存（可省）        │
+# │   ├── tushare/                 ← 各 skill 预编译环境      │
+# │   │   ├── .venv/               ← Python 虚拟环境           │
+# │   │   ├── requirements.txt     ← 依赖列表                 │
+# │   │   └── setup.done           ← 预编译完成标记           │
+# │   ├── stock_news/                                        │
+# │   ├── quant_algo/                                        │
+# │   ├── web_search/              ← 无 pip 依赖（纯 stdlib）  │
+# │   └── xiaohongshu_copy/                                  │
+# └─────────────────────────────────────────────────────────────┘
+
+# ── Python 基础环境定义 ──────────────────────────────────────
+# 构建脚本 build-skills-env.bat 使用系统 Python 3.13 直接创建 venv
+# 如需 uv 方式（uv 自包含运行时，无需预装 Python），将 uv_url 行取消注释
+python:
+  # uv 独立可执行文件下载地址（Windows x86_64-msvc，带内置 Python，无需系统 Python）
+  # uv_url: "https://astral.sh/uv/0.6.5/uv-x86_64-pc-windows-msvc.zip"
+  # 构建脚本使用系统 Python（需预装）：
+  system_python_version: "3.13"
+  # 构建脚本使用系统 Python（需预装），路径由 build-skills-env.bat 自动检测：
+  #   - 优先取 PATH 中的 python
+  #   - 兜底扫描 %LOCALAPPDATA%\Programs\Python\Python313\python.exe
+  # 如需在 YAML 中显式指定，建议通过环境变量 PYTHON313_PATH 传入，勿硬编码用户目录
+  system_python_path: ""
+
+# ── skill 环境定义 ──────────────────────────────────────────
+skills:
+
+  # ── tushare: A股金融数据 ─────────────────────────────────
+  tushare:
+    description: "Tushare Pro A股/基金/期货数据接口（需要 TUSHARE_TOKEN）"
+    env_type: "python_uv"
+    skill_dir: "tushare-finance"  # monorepo 子目录名
+    packages:
+      - "tushare>=1.3.0"
+      - "pandas>=2.0.0"
+      - "openpyxl>=3.1.0"
+    # 运行时需要的环境变量（用户在 skill 配置页填写）
+    required_env_vars:
+      - name: "TUSHARE_TOKEN"
+        description: "Tushare Pro Token，从 tushare.pro 注册获取（必填）"
+    optional_env_vars: []
+    pure_llm: false
+
+  # ── stock_news: 股票新闻分析 ─────────────────────────────
+  stock_news:
+    description: "财经新闻情绪分析与情感识别（Yahoo Finance 免费数据）"
+    env_type: "python_uv"
+    skill_dir: "stock-analysis"
+    packages:
+      - "yfinance"
+      - "pandas"
+      - "rich"
+      - "matplotlib"
+      - "mplfinance"
+    required_env_vars: []
+    optional_env_vars: []
+    pure_llm: false
+
+  # ── quant_algo: 量化策略框架 ─────────────────────────────
+  quant_algo:
+    description: "回测框架与策略编写辅助（Yahoo Finance + DuckDuckGo）"
+    env_type: "python_uv"
+    skill_dir: "stock-market-pro"
+    packages:
+      - "yfinance"
+      - "rich"
+      - "pandas"
+      - "plotille"
+      - "matplotlib"
+      - "mplfinance"
+      - "ddgs"
+    required_env_vars: []
+    optional_env_vars: []
+    pure_llm: false
+
+  # ── web_search: 网页搜索 ─────────────────────────────────
+  web_search:
+    description: "通用网页搜索（纯 Python 标准库，无 pip 依赖）"
+    env_type: "python_uv"
+    skill_dir: "web-search-plus"
+    packages: []  # 纯 stdlib，无任何第三方包
+    required_env_vars: []
+    optional_env_vars:
+      - name: "SERPER_API_KEY"
+        description: "Serper.dev API Key（可选，付费，提供更好的搜索质量）"
+      - name: "TAVILY_API_KEY"
+        description: "Tavily AI API Key（可选，付费，AI 优化的搜索结果）"
+      - name: "EXA_API_KEY"
+        description: "Exa AI API Key（可选，付费，支持语义搜索）"
+      - name: "YOU_API_KEY"
+        description: "You.com API Key（可选，付费）"
+      - name: "SEARXNG_INSTANCE_URL"
+        description: "自建 SearXNG 实例 URL（可选，免费，自托管搜索）"
+    pure_llm: false
+
+  # ── xiaohongshu_copy: 小红书文案 ─────────────────────────
+  xiaohongshu_copy:
+    description: "小红书种草笔记生成（需要 MCP 服务 + 扫码登录）"
+    env_type: "python_uv"
+    skill_dir: "xiaohongshu-mcp"
+    packages:
+      - "requests"
+    required_env_vars: []
+    optional_env_vars:
+      - name: "XHS_COOKIE"
+        description: "小红书 Cookie（可选，复制自浏览器登录态）"
+    notes:
+      - "需要运行 MCP 服务（xiaohongshu-mcp binary）"
+      - "需要浏览器扫码授权登录"
+    pure_llm: false
+
+# ── 纯 LLM skill（无需 Python 环境）──────────────────────────
+# 这些 skill 只包含 SKILL.md 文件，通过 LLM prompt 调用
+# 无需预编译，直接下载即可使用
+pure_llm_skills:
+  - id: "copywriter"
+    name: "营销文案生成"
+    description: "各类营销文案创作"
+    repos: ["openclaw-cn/skills-creative"]
+  - id: "doc_writer"
+    name: "文档写作"
+    description: "日报周报邮件等文档生成"
+    repos: ["openclaw-cn/skills-office", "openclaw-cn/skills-general"]
+  - id: "xiaohongshu_seo"
+    name: "小红书SEO优化"
+    description: "小红书内容SEO优化建议"
+    repos: ["openclaw-cn/skills-social"]
+  - id: "xiaohongshu_hashtag"
+    name: "话题标签优化"
+    description: "小红书热门话题标签推荐"
+    repos: ["openclaw-cn/skills-social"]
+  - id: "douyin_script"
+    name: "抖音脚本生成"
+    description: "抖音短视频脚本创作"
+    repos: ["openclaw-cn/skills-social"]
+  - id: "douyin_comment"
+    name: "抖音评论管理"
+    description: "抖音评论互动和回复建议"
+    repos: ["openclaw-cn/skills-social"]
+  - id: "video_script"
+    name: "视频脚本助手"
+    description: "各类视频脚本创作"
+    repos: ["openclaw-cn/skills-creative"]
+  - id: "comic_script"
+    name: "漫剧剧本生成"
+    description: "分镜头剧本和对话生成"
+    repos: ["openclaw-cn/skills-creative"]
+  - id: "novel_writer"
+    name: "小说创作框架"
+    description: "提供小说结构/人物/情节设计"
+    repos: ["openclaw-cn/skills-creative"]
+  - id: "story_outline"
+    name: "故事大纲生成"
+    description: "自动生成故事大纲和世界观"
+    repos: ["openclaw-cn/skills-creative"]
+  - id: "ppt_generator"
+    name: "PPT大纲生成"
+    description: "PPT结构和内容建议生成"
+    repos: ["openclaw-cn/skills-office"]
+  - id: "meeting_minutes"
+    name: "会议纪要整理"
+    description: "自动整理会议纪要和待办"
+    repos: ["openclaw-cn/skills-office"]
+  - id: "product_selector"
+    name: "选品分析"
+    description: "电商选品数据分析"
+    repos: ["openclaw-cn/skills-ecommerce"]
+
+# ── 构建产物元信息 ──────────────────────────────────────────
+build:
+  output_dir: "scripts/data/skills-env"
+  zip_name: "skills-env-offline.zip"
+  zip_destination: "scripts/"  # 生成的 zip 放在 scripts/ 下

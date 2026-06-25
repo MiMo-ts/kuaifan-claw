@@ -1,0 +1,332 @@
+[
+  {
+    "file": "components\\BalancePanel.tsx",
+    "icons": [
+      "CxIconWallet",
+      "CxIconZap",
+      "CxIconTrendingUp",
+      "CxIconRefresh"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\CostControlPanel.tsx",
+    "icons": [
+      "CxIconDollarSign",
+      "CxIconAlertTriangle",
+      "CxIconPlus",
+      "CxIconTrash2",
+      "CxIconRefresh",
+      "CxIconCheckCircle",
+      "CxIconClose",
+      "CxIconClock",
+      "CxIconTarget",
+      "CxIconBell",
+      "CxIconEdit2"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\layout\\CodexChatArea.tsx",
+    "icons": [
+      "CxIconSend",
+      "CxIconSquare",
+      "CxIconTerminal",
+      "CxIconLoader",
+      "CxIconPower",
+      "CxIconPlay",
+      "CxIconPaperclip",
+      "CxIconClose",
+      "CxIconImage",
+      "CxIconFilm",
+      "CxIconFile",
+      "CxIconChevronDown",
+      "CxIconCpu"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\layout\\CodexSidebar.tsx",
+    "icons": [
+      "CxIconSparkles",
+      "CxIconMessageSquare",
+      "CxIconChevronsLeft",
+      "CxIconPlus"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\ModelConfigModal.tsx",
+    "icons": [
+      "CxIconClose",
+      "CxIconRefresh",
+      "CxIconKey",
+      "CxIconCheckCircle",
+      "CxIconXCircle",
+      "CxIconLoader",
+      "CxIconEye",
+      "CxIconEyeOff",
+      "CxIconShield"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\ModuleCardsModal.tsx",
+    "icons": [
+      "CxIconClose",
+      "CxIconServer",
+      "CxIconRobots",
+      "CxIconTerminal",
+      "CxIconDatabase",
+      "CxIconPlug",
+      "CxIconShoppingBag",
+      "CxIconListTree",
+      "CxIconSettings",
+      "CxIconArrowUpRight"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\MonitoringDashboard.tsx",
+    "icons": [
+      "CxIconActivity",
+      "CxIconTrendingUp",
+      "CxIconAlertTriangle",
+      "CxIconCheckCircle",
+      "CxIconXCircle",
+      "CxIconClock",
+      "CxIconZap",
+      "CxIconDollarSign",
+      "CxIconRefresh",
+      "CxIconFilter",
+      "CxIconEye"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\CreateInstance.tsx",
+    "icons": [
+      "CxIconLoader",
+      "CxIconCheckCircle",
+      "CxIconSmartphone",
+      "CxIconChevronRight",
+      "CxIconWifi",
+      "CxIconDownload",
+      "CxIconSparkles",
+      "CxIconInfo",
+      "CxIconAlertCircle"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\EnvCheck.tsx",
+    "icons": [
+      "CxIconCheckCircle",
+      "CxIconXCircle",
+      "CxIconAlertCircle",
+      "CxIconRefresh",
+      "CxIconDownload",
+      "CxIconLoader",
+      "CxIconGitBranch"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\FeishuWizard.tsx",
+    "icons": [
+      "CxIconClose",
+      "CxIconExternalLink",
+      "CxIconLoader",
+      "CxIconCheckCircle",
+      "CxIconAlertCircle"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\ModelConfig.tsx",
+    "icons": [
+      "CxIconCheckCircle",
+      "CxIconLoader",
+      "CxIconAlertCircle",
+      "CxIconServer",
+      "CxIconWifi",
+      "CxIconExternalLink"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\OpenClawInstall.tsx",
+    "icons": [
+      "CxIconCheckCircle",
+      "CxIconXCircle",
+      "CxIconLoader",
+      "CxIconRefresh",
+      "CxIconAlertTriangle"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\PluginConfig.tsx",
+    "icons": [
+      "CxIconCheckCircle",
+      "CxIconDownload",
+      "CxIconLoader",
+      "CxIconAlertTriangle",
+      "CxIconRefresh",
+      "CxIconXCircle"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\QuickBindModal.tsx",
+    "icons": [
+      "CxIconClose",
+      "CxIconLoader",
+      "CxIconCheckCircle",
+      "CxIconAlertCircle",
+      "CxIconRefresh",
+      "CxIconClock"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\RobotShop.tsx",
+    "icons": [
+      "CxIconCheckCircle",
+      "CxIconAlertCircle",
+      "CxIconLoader",
+      "CxIconPackages"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "components\\wizard\\WizardNav.tsx",
+    "icons": [
+      "CxIconCheckCircle",
+      "CxIconXCircle",
+      "CxIconAlertCircle",
+      "CxIconLoader"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "pages\\BackupPage.tsx",
+    "icons": [
+      "CxIconDownload",
+      "CxIconRefresh",
+      "CxIconTrash2"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "pages\\HomePage.tsx",
+    "icons": [
+      "CxIconLoader",
+      "CxIconDownload"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "pages\\InstanceCreatePage.tsx",
+    "icons": [
+      "CxIconExternalLink"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "pages\\InstancePage.tsx",
+    "icons": [
+      "CxIconPlus",
+      "CxIconEdit",
+      "CxIconTrash2",
+      "CxIconRefresh",
+      "CxIconArrowLeft",
+      "CxIconLoader",
+      "CxIconClose",
+      "CxIconChevronDown",
+      "CxIconChevronUp",
+      "CxIconZap"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "pages\\LoginPage.tsx",
+    "icons": [
+      "CxIconLoader",
+      "CxIconLogIn",
+      "CxIconUserPlus",
+      "CxIconKey"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "pages\\RobotShopPage.tsx",
+    "icons": [
+      "CxIconPlus",
+      "CxIconArrowLeft",
+      "CxIconDownload",
+      "CxIconLoader",
+      "CxIconChevronDown",
+      "CxIconChevronUp",
+      "CxIconRefresh",
+      "CxIconCheckCircle",
+      "CxIconXCircle",
+      "CxIconSkipForward",
+      "CxIconSearch",
+      "CxIconFilter",
+      "CxIconGrid3X3",
+      "CxIconTag",
+      "CxIconSparkles",
+      "CxIconPackages",
+      "CxIconAlertTriangle",
+      "CxIconRobots"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "pages\\SettingsPage.tsx",
+    "icons": [
+      "CxIconMoon",
+      "CxIconSun",
+      "CxIconMonitor",
+      "CxIconRefresh",
+      "CxIconArrowLeft",
+      "CxIconLoader",
+      "CxIconTrash2",
+      "CxIconClose",
+      "CxIconRotateCcw",
+      "CxIconMessageCircle",
+      "CxIconDownload",
+      "CxIconCheckCircle",
+      "CxIconSettings",
+      "CxIconTerminal",
+      "CxIconPackages",
+      "CxIconInfo",
+      "CxIconPalette",
+      "CxIconFileText",
+      "CxIconBoxes",
+      "CxIconExternalLink"
+    ],
+    "skipped": []
+  },
+  {
+    "file": "pages\\TokenUsagePage.tsx",
+    "icons": [
+      "CxIconRefresh",
+      "CxIconArrowLeft",
+      "CxIconBarChart3",
+      "CxIconHash",
+      "CxIconDatabase",
+      "CxIconServer",
+      "CxIconMessageSquare",
+      "CxIconTrendingUp",
+      "CxIconMonitor",
+      "CxIconWallet",
+      "CxIconSparkles",
+      "CxIconActivity",
+      "CxIconZap",
+      "CxIconLayers"
+    ],
+    "skipped": []
+  }
+]
