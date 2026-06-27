@@ -254,8 +254,8 @@ export default function TokenUsagePage() {
   return (
     <div className="min-h-full" style={{ background: C.bg }}>
       <header
-        className="sticky top-0 z-20 backdrop-blur-md"
-        style={{ background: 'rgba(255, 255, 255, 0.92)', borderBottom: `1px solid ${C.borderSoft}` }}
+        className="sticky top-0 z-20"
+        style={{ background: C.bgElev, borderBottom: `1px solid ${C.borderSoft}` }}
       >
         <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center gap-4">
           <button

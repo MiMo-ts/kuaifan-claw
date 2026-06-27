@@ -68,7 +68,7 @@
 
   /* Sidebar surface gradient (subtle warm wash) */
   --cx-sidebar-bg: linear-gradient(180deg, #fbf9f5 0%, #f6f2eb 100%);
-  --cx-topbar-bg: rgba(250, 248, 245, 0.72);
+  --cx-topbar-bg: #faf8f5;
 
   /* Spacing */
   --cx-sidebar-width: 264px;

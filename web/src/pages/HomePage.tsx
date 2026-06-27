@@ -72,22 +72,23 @@ export default function HomePage() {
     }
   };
 
-  // Poll gateway status
+  // Poll gateway status (skip during gateway operation to avoid overriding state)
+  const pollGateway = useCallback(async () => {
+    if (gatewayBusy || gatewayOpLockRef.current) return;
+    try {
+      const status = await invoke<GatewayStatus>("get_gateway_status");
+      setGatewayStatus(status);
+      setGatewayRunning(status.running);
+    } catch { /* ignore */ }
+  }, [gatewayBusy]);
+
   useEffect(() => {
     if (!hydrated) return;
-    const poll = async () => {
-      if (gatewayBusy) return;
-      try {
-        const status = await invoke<GatewayStatus>("get_gateway_status");
-        setGatewayStatus(status);
-        setGatewayRunning(status.running);
-      } catch { /* ignore */ }
-    };
-    const id = window.setInterval(poll, 5000);
-    const onVis = () => { if (document.visibilityState === "visible") void poll(); };
+    const id = window.setInterval(pollGateway, 5000);
+    const onVis = () => { if (document.visibilityState === "visible") void pollGateway(); };
     document.addEventListener("visibilitychange", onVis);
     return () => { window.clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
-  }, [hydrated, gatewayBusy, setGatewayRunning]);
+  }, [hydrated, pollGateway]);
 
   // Module cards event listener
   useEffect(() => {
@@ -113,10 +114,13 @@ export default function HomePage() {
     return () => window.clearTimeout(t);
   }, [hydrated]);
 
+  const gatewayOpLockRef = useRef(false);
+
   const handleToggleGateway = useCallback(async () => {
     if (gatewayBusy) return;
     const isRunning = gatewayRunningRef.current;
     setGatewayBusy(true);
+    gatewayOpLockRef.current = true;
     const toastId = toast.loading(isRunning ? "正在停止网关..." : "正在启动网关...", {
       style: { background: "var(--cx-bg-overlay)", color: "var(--cx-text)", border: "1px solid var(--cx-border)" },
     });
@@ -133,9 +137,11 @@ export default function HomePage() {
         setGatewayStatus(status);
       }
     } catch (e) {
+      setGatewayRunning(isRunning); // 恢复原状态
       toast.error(`操作失败: ${e instanceof Error ? e.message : String(e)}`, { id: toastId });
     } finally {
       setGatewayBusy(false);
+      setTimeout(() => { gatewayOpLockRef.current = false; }, 3000);
     }
   }, [gatewayBusy, setGatewayRunning]);
 

@@ -113,11 +113,19 @@ export default function RobotShopPage() {
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<RobotTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  const STORAGE_KEY = 'openclaw-robot-shop-dl';
   const [downloadingRobots, setDownloadingRobots] = useState<Record<string, boolean>>({});
-  const [downloadStates, setDownloadStates] = useState<Record<string, DownloadState>>({});
-  const [expandedRobot, setExpandedRobot] = useState<string | null>(null);
+  const [downloadStates, setDownloadStates] = useState<Record<string, DownloadState>>(() => {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; }
+  });
+  const [expandedRobots, setExpandedRobots] = useState<Set<string>>(new Set());
   const [activeCategory, setActiveCategory] = useState<string>('全部');
   const [searchQuery, setSearchQuery] = useState('');
+
+  const saveDownloadStates = (ds: Record<string, DownloadState>) => {
+    setDownloadStates(ds);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ds)); } catch {}
+  };
 
   const loadTemplates = useCallback(async () => {
     setLoading(true);
@@ -141,7 +149,11 @@ export default function RobotShopPage() {
     for (const sid of robot.default_skills) {
       initSkills[sid] = { skill_id: sid, status: 'pending' };
     }
-    setDownloadStates(prev => ({ ...prev, [robot.id]: { skills: initSkills, overall: 'downloading' } }));
+    setDownloadStates(prev => {
+      const ds = { ...prev, [robot.id]: { skills: initSkills, overall: 'downloading' as const } };
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ds)); } catch {}
+      return ds;
+    });
     setDownloadingRobots(prev => ({ ...prev, [robot.id]: true }));
 
     try {
@@ -155,14 +167,15 @@ export default function RobotShopPage() {
       for (const r of res.results) {
         updated[r.skill_id] = { skill_id: r.skill_id, status: r.status as SkillStatus['status'], message: r.message };
       }
-      setDownloadStates(prev => ({
-        ...prev,
-        [robot.id]: {
+      setDownloadStates(prev => {
+        const ds = { ...prev, [robot.id]: {
           skills: updated,
-          overall: res.fail_count === 0 ? 'done' : res.success_count === 0 ? 'error' : 'partial',
-          errorMessage: res.fail_count > 0 ? res.fail_count + ' 个 Skill 安装失败，请点击重试按钮重试' : undefined,
-        },
-      }));
+          overall: (res.fail_count === 0 ? 'done' : res.success_count === 0 ? 'error' : 'partial') as DownloadState['overall'],
+          errorMessage: res.fail_count > 0 ? res.fail_count + ' 个 Skill 安装失败' : undefined,
+        }};
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ds)); } catch {}
+        return ds;
+      });
 
       if (res.fail_count === 0) {
         toast.success(robot.name + '：全部 ' + res.results.length + ' 个 Skill 已就绪');
@@ -171,10 +184,11 @@ export default function RobotShopPage() {
         toast.error(robot.name + '：' + res.fail_count + ' 个 Skill 安装失败，可展开详情重试');
       }
     } catch (e) {
-      setDownloadStates(prev => ({
-        ...prev,
-        [robot.id]: { skills: initSkills, overall: 'error', errorMessage: String(e) },
-      }));
+      setDownloadStates(prev => {
+        const ds = { ...prev, [robot.id]: { skills: initSkills, overall: 'error' as const, errorMessage: String(e) }};
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ds)); } catch {}
+        return ds;
+      });
       toast.error('下载失败: ' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setDownloadingRobots(prev => { const n = { ...prev }; delete n[robot.id]; return n; });
@@ -185,7 +199,9 @@ export default function RobotShopPage() {
     setDownloadStates(prev => {
       const cur = prev[robotId];
       if (!cur) return prev;
-      return { ...prev, [robotId]: { ...cur, skills: { ...cur.skills, [skillId]: { skill_id: skillId, status: 'downloading' } } } };
+      const ds = { ...prev, [robotId]: { ...cur, skills: { ...cur.skills, [skillId]: { skill_id: skillId, status: 'downloading' as const } } } };
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ds)); } catch {}
+      return ds;
     });
     try {
       const res = await invoke<{ skill_id: string; status: string; message: string }>('download_skill_retry', { robotId, skillId });
@@ -197,14 +213,12 @@ export default function RobotShopPage() {
         newSkills[skillId] = { skill_id: res.skill_id, status: res.status as SkillStatus['status'], message: res.message };
         const failCount = Object.values(newSkills).filter(s => s.status === 'failed').length;
         const successCount = Object.values(newSkills).filter(s => s.status === 'success' || s.status === 'skipped').length;
-        return {
-          ...prev,
-          [robotId]: {
-            ...cur, skills: newSkills,
-            overall: failCount === 0 ? 'done' : successCount === 0 ? 'error' : 'partial',
-            errorMessage: failCount > 0 ? failCount + ' 个 Skill 安装失败' : undefined,
-          },
-        };
+        const ds = { ...prev, [robotId]: { ...cur, skills: newSkills,
+          overall: (failCount === 0 ? 'done' : successCount === 0 ? 'error' : 'partial') as DownloadState['overall'],
+          errorMessage: failCount > 0 ? failCount + ' 个 Skill 安装失败' : undefined,
+        }};
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ds)); } catch {}
+        return ds;
       });
       if (succeeded) { toast.success(skillLabel(skillId) + ' 安装成功'); await loadTemplates(); }
       else { toast.error(skillLabel(skillId) + ' 仍失败: ' + res.message); }
@@ -212,10 +226,9 @@ export default function RobotShopPage() {
       setDownloadStates(prev => {
         const cur = prev[robotId];
         if (!cur) return prev;
-        return {
-          ...prev,
-          [robotId]: { ...cur, skills: { ...cur.skills, [skillId]: { skill_id: skillId, status: 'failed', message: String(e) } } },
-        };
+        const ds = { ...prev, [robotId]: { ...cur, skills: { ...cur.skills, [skillId]: { skill_id: skillId, status: 'failed' as const, message: String(e) } } } };
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ds)); } catch {}
+        return ds;
       });
       toast.error('重试失败: ' + (e instanceof Error ? e.message : String(e)));
     }
@@ -238,7 +251,7 @@ export default function RobotShopPage() {
   }, {} as Record<string, RobotTemplate[]>);
 
   const downloadState = (robotId: string): DownloadState | null => downloadStates[robotId] ?? null;
-  const isDownloading = (robotId: string) => !!downloadingRobots[robotId];
+  const isDownloading = (robotId: string) => !!downloadingRobots[robotId] || downloadState(robotId)?.overall === 'downloading';
 
   const overallBadge = (robot: RobotTemplate) => {
     const ds = downloadState(robot.id);
@@ -260,8 +273,8 @@ export default function RobotShopPage() {
 
   return (
     <div className="min-h-full" style={{ background: C.bg }}>
-      <header className="sticky top-0 z-20 backdrop-blur-md"
-        style={{ background: 'rgba(255, 255, 255, 0.92)', borderBottom: '1px solid ' + C.borderSoft }}>
+      <header className="sticky top-0 z-20"
+        style={{ background: C.bgElev, borderBottom: '1px solid ' + C.borderSoft }}>
         <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center gap-4">
           <button onClick={() => navigate('/home')}
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors duration-150"
@@ -387,9 +400,13 @@ export default function RobotShopPage() {
                     <RobotCard key={robot.id} robot={robot}
                       ds={downloadState(robot.id)}
                       downloading={isDownloading(robot.id)}
-                      expanded={expandedRobot === robot.id}
+                      expanded={expandedRobots.has(robot.id)}
                       badge={overallBadge(robot)}
-                      onToggleExpand={() => setExpandedRobot(prev => prev === robot.id ? null : robot.id)}
+                      onToggleExpand={() => setExpandedRobots(prev => {
+                        const next = new Set(prev);
+                        next.has(robot.id) ? next.delete(robot.id) : next.add(robot.id);
+                        return next;
+                      })}
                       onDownload={() => handleDownload(robot)}
                       onRetrySkill={(skillId) => handleRetrySkill(robot.id, skillId)}
                       onRetryAll={() => handleRetryAll(robot)}
@@ -466,9 +483,25 @@ function RobotCard({
             {expanded ? '收起' : '详情'}
           </button>
           <div className="flex-1" />
+          {downloading && ds && (
+            <div className="flex-1 min-w-0 mr-2">
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <CxIconLoader className="w-2.5 h-2.5 animate-spin" style={{ color: C.accent }} />
+                <span className="text-[10px] font-medium" style={{ color: C.accent }}>
+                  {Object.values(ds.skills).filter(s => s.status === 'success' || s.status === 'skipped').length}/{Object.keys(ds.skills).length} Skills
+                </span>
+              </div>
+              <div className="w-full h-1 rounded-full" style={{ background: C.borderSoft }}>
+                <div className="h-full rounded-full transition-all duration-500" style={{
+                  background: C.accent,
+                  width: Math.round(Object.values(ds.skills).filter(s => s.status === 'success' || s.status === 'skipped').length / Math.max(1, Object.keys(ds.skills).length) * 100) + '%'
+                }} />
+              </div>
+            </div>
+          )}
           {!robot.downloaded && (
             <button onClick={onDownload} disabled={downloading}
-              className="h-7 px-2.5 rounded-md text-[11.5px] font-medium flex items-center gap-1 transition-colors duration-150"
+              className="h-7 px-2.5 rounded-md text-[11.5px] font-medium flex items-center gap-1 shrink-0 transition-colors duration-150"
               style={{ background: 'transparent', color: C.accent, border: '1px solid ' + C.accent + '60' }}
               onMouseEnter={(e) => { e.currentTarget.style.background = C.accentSoft; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>

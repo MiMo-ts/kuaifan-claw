@@ -445,7 +445,7 @@ export default function CodexChatArea({
                       ...fontFamily,
                     }}
                   >
-                    {isUser ? 'You' : 'Assistant'}
+                    {isUser ? '我' : '快泛助手'}
                   </span>
                 </div>
                 <div

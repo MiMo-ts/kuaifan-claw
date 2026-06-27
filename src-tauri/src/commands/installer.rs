@@ -869,26 +869,44 @@ pub async fn start_openclaw_background_install(
             let data_base = data_base.clone();
             move || -> Result<(), String> {
                 let bytes = std::fs::read(&bundled_path)
-                    .map_err(|e| format!("读取内置 tarball 失败: {}", e))?;
-                let extract_root = format!("{}/.openclaw-tarball-extract", data_base);
+                    .map_err(|e| format!("读取内置包失败: {}", e))?;
+                let extract_root = format!("{}/.openclaw-pkg-extract", data_base);
                 let _ = std::fs::remove_dir_all(&extract_root);
                 std::fs::create_dir_all(&extract_root)
                     .map_err(|e| format!("创建临时解压目录失败: {}", e))?;
+                // 尝试 zip 解压（优先），失败则回退 tar.gz
                 let cursor = std::io::Cursor::new(bytes);
-                let dec = flate2::read::GzDecoder::new(cursor);
-                let mut archive = tar::Archive::new(dec);
-                archive
-                    .unpack(&extract_root)
-                    .map_err(|e| format!("解压内置 tarball 失败: {}", e))?;
-                let pkg_folder = std::path::Path::new(&extract_root).join("package");
-                if !pkg_folder.is_dir() {
-                    return Err("内置 tarball 解压后未找到 package/ 目录".to_string());
+                if let Ok(mut zip_archive) = zip::ZipArchive::new(cursor) {
+                    zip_archive
+                        .extract(&extract_root)
+                        .map_err(|e| format!("解压内置 zip 包失败: {}", e))?;
+                } else {
+                    let bytes2 = std::fs::read(&bundled_path)
+                        .map_err(|e| format!("重读内置包失败: {}", e))?;
+                    let cursor2 = std::io::Cursor::new(bytes2);
+                    let dec = flate2::read::GzDecoder::new(cursor2);
+                    let mut archive = tar::Archive::new(dec);
+                    archive
+                        .unpack(&extract_root)
+                        .map_err(|e| format!("解压内置 tar.gz 包失败: {}", e))?;
                 }
+                // 兼容两种结构：package/ 子目录 或 直接散落在根目录
+                let pkg_folder = std::path::Path::new(&extract_root).join("package");
+                let has_pkg_subdir = pkg_folder.is_dir();
+                let actual_pkg = if has_pkg_subdir { pkg_folder } else { std::path::PathBuf::from(&extract_root) };
+
+                if !has_pkg_subdir {
+                    // 无 package/ 子目录，验证根目录有 dist/ 或 package.json
+                    if !actual_pkg.join("package.json").exists() && !actual_pkg.join("dist").is_dir() {
+                        return Err("内置包解压后未找到 package.json 或 dist/ 目录".to_string());
+                    }
+                }
+
                 if std::path::Path::new(&openclaw_dir).exists() {
                     std::fs::remove_dir_all(&openclaw_dir)
                         .map_err(|e| format!("删除旧目录失败: {}", e))?;
                 }
-                std::fs::rename(&pkg_folder, &openclaw_dir)
+                std::fs::rename(&actual_pkg, &openclaw_dir)
                     .map_err(|e| format!("移动到目标目录失败: {}", e))?;
                 std::fs::remove_dir_all(&extract_root).ok();
                 Ok(())
@@ -905,6 +923,8 @@ pub async fn start_openclaw_background_install(
                     "内置包解压失败，降级为 registry 下载",
                 ),
             );
+            // 确保后续逻辑走 registry 下载分支
+            let _ = std::fs::remove_dir_all(&openclaw_dir);
         }
     }
 
@@ -1968,32 +1988,48 @@ pub async fn install_openclaw(
             let data_base = data_base.clone();
             move || -> Result<(), String> {
                 let bytes = std::fs::read(&bundled_path)
-                    .map_err(|e| format!("读取内置 tarball 失败: {}", e))?;
+                    .map_err(|e| format!("读取内置包失败: {}", e))?;
                 let extract_root = format!(
-                    "{}/.openclaw-tarball-extract",
+                    "{}/.openclaw-pkg-extract",
                     data_base.trim_end_matches(|c| c == '/' || c == '\\')
                 );
                 let _ = std::fs::remove_dir_all(&extract_root);
                 std::fs::create_dir_all(&extract_root)
                     .map_err(|e| format!("创建临时解压目录失败: {}", e))?;
 
+                // 尝试 zip 解压（优先），失败则回退 tar.gz
                 let cursor = std::io::Cursor::new(bytes);
-                let dec = flate2::read::GzDecoder::new(cursor);
-                let mut archive = tar::Archive::new(dec);
-                archive
-                    .unpack(&extract_root)
-                    .map_err(|e| format!("解压内置 tarball 失败: {}", e))?;
+                if let Ok(mut zip_archive) = zip::ZipArchive::new(cursor) {
+                    zip_archive
+                        .extract(&extract_root)
+                        .map_err(|e| format!("解压内置 zip 包失败: {}", e))?;
+                } else {
+                    // 重读文件尝试 tar.gz
+                    let bytes2 = std::fs::read(&bundled_path)
+                        .map_err(|e| format!("重读内置包失败: {}", e))?;
+                    let cursor2 = std::io::Cursor::new(bytes2);
+                    let dec = flate2::read::GzDecoder::new(cursor2);
+                    let mut archive = tar::Archive::new(dec);
+                    archive
+                        .unpack(&extract_root)
+                        .map_err(|e| format!("解压内置 tar.gz 包失败: {}", e))?;
+                }
 
                 let pkg_folder = std::path::Path::new(&extract_root).join("package");
-                if !pkg_folder.is_dir() {
-                    return Err("内置 tarball 解压后未找到 package/ 目录".to_string());
+                let has_pkg_subdir = pkg_folder.is_dir();
+                let actual_pkg = if has_pkg_subdir { pkg_folder } else { std::path::PathBuf::from(&extract_root) };
+
+                if !has_pkg_subdir {
+                    if !actual_pkg.join("package.json").exists() && !actual_pkg.join("dist").is_dir() {
+                        return Err("内置包解压后未找到 package.json 或 dist/ 目录".to_string());
+                    }
                 }
 
                 if std::path::Path::new(&openclaw_dir).exists() {
                     std::fs::remove_dir_all(&openclaw_dir)
                         .map_err(|e| format!("删除旧目录失败: {}", e))?;
                 }
-                std::fs::rename(&pkg_folder, &openclaw_dir)
+                std::fs::rename(&actual_pkg, &openclaw_dir)
                     .map_err(|e| format!("移动到目标目录失败: {}", e))?;
                 std::fs::remove_dir_all(&extract_root).ok();
                 Ok(())
@@ -2358,8 +2394,147 @@ pub async fn install_openclaw(
         }
     }
 
+    // 修复缺失的 strip-ansi 依赖（pi-coding-agent 未声明该依赖）
+    // 使用内置 Node.js 的 npm（用户机 PATH 可能不含 npm）
+    let strip_ansi_path = std::path::Path::new(&openclaw_dir).join("node_modules").join("strip-ansi");
+    if !strip_ansi_path.is_dir() {
+        let strip_ansi_dir = openclaw_dir.clone();
+        // data_base 是用户数据目录（如 D:\快泛claw\data），env/ 子目录下有 Node.js
+        let node_root = crate::env_paths::env_root(&data_base);
+        let npm_exe = crate::env_paths::node_exe(&node_root)
+            .parent().map(|p| p.join("npm.cmd")).filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from("npm"));
+        let strip_ansi_result = tokio::task::spawn_blocking(move || {
+            hidden_cmd::cmd()
+                .current_dir(&strip_ansi_dir)
+                .args(["/C", &npm_exe.display().to_string(), "install", "--no-save", "strip-ansi@8", "--prefer-offline", "--no-audit", "--no-fund", "--registry=https://registry.npmmirror.com"])
+                .output()
+        })
+        .await;
+        match strip_ansi_result {
+            Ok(Ok(o)) if o.status.success() => {
+                info!("已安装 strip-ansi 依赖");
+            }
+            _ => {
+                info!("strip-ansi npm 安装失败，尝试复制内置 strip-ansi");
+                // 终极兜底：手动创建 strip-ansi 包（仅提供 startsWith 等基础功能）
+                let _ = std::fs::create_dir_all(&strip_ansi_path);
+                let stub_js = r#"module.exports = function stripAnsi(s) { return typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*m/g, '') : String(s); };
+module.exports.default = module.exports;
+"#;
+                let _ = std::fs::write(strip_ansi_path.join("index.js"), stub_js);
+                let _ = std::fs::write(strip_ansi_path.join("package.json"), r#"{"name":"strip-ansi","version":"8.0.0","main":"index.js"}"#);
+            }
+        }
+    } else {
+        info!("strip-ansi 已存在于 node_modules，跳过安装");
+    }
+
+    // 修改网关 Bonjour 名称为中文（默认 "Clawdbot" → "快泛助手"）
+    if let Err(e) = patch_gateway_bonjour_name(&openclaw_dir).await {
+        warn!("网关名称汉化失败（非致命）: {}", e);
+    }
+
+    // 清理无依赖的孤立扩展（这些扩展缺少 npm 包，网关加载它们会报错并拖慢启动）
+    // 不影响飞书、微信等核心通道
+    // 注意：memory-core 被网关默认 config 的 plugins.slots.memory 引用，不能删除
+    let orphaned_extensions = [
+        "diagnostics-otel", "matrix", "nostr", "tlon", "open-prose",
+        "memory-lancedb", "minimax-portal-auth", "line",
+        "slack", "telegram", "whatsapp", "discord", "imessage",
+    ];
+    let mut cleaned_extensions = Vec::new();
+    for ext in &orphaned_extensions {
+        let ext_path = PathBuf::from(&openclaw_dir).join("extensions").join(ext);
+        if ext_path.exists() {
+            let has_node_modules = ext_path.join("node_modules").is_dir();
+            let has_dist = ext_path.join("dist").is_dir()
+                || ext_path.join("dist").join("index.js").is_file();
+            if !has_node_modules && !has_dist {
+                let _ = std::fs::remove_dir_all(&ext_path);
+                info!("已清理无依赖扩展: {}", ext);
+                cleaned_extensions.push(ext.to_string());
+            }
+        }
+    }
+
+    // 同步清理 openclaw.json 中已删除扩展的引用（避免 Config invalid 错误）
+    if !cleaned_extensions.is_empty() {
+        let oc_json = PathBuf::from(&openclaw_dir).join("openclaw.json");
+        if oc_json.exists() {
+            if let Ok(content) = std::fs::read_to_string(&oc_json) {
+                if let Ok(mut gw) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let mut changed = false;
+                    // 清理 plugins.entries 中的引用
+                    if let Some(entries) = gw.get_mut("plugins").and_then(|p| p.get_mut("entries")).and_then(|e| e.as_object_mut()) {
+                        for ext in &cleaned_extensions {
+                            if entries.remove(ext).is_some() { changed = true; }
+                        }
+                    }
+                    // 清理 plugins.slots 中的引用
+                    if let Some(slots) = gw.get_mut("plugins").and_then(|p| p.get_mut("slots")).and_then(|s| s.as_object_mut()) {
+                        let mut keys_to_remove = Vec::new();
+                        for (k, v) in slots.iter() {
+                            if let Some(plugin_id) = v.as_str() {
+                                if cleaned_extensions.contains(&plugin_id.to_string()) {
+                                    keys_to_remove.push(k.clone());
+                                }
+                            }
+                        }
+                        for k in &keys_to_remove {
+                            slots.remove(k);
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        let _ = std::fs::write(&oc_json, serde_json::to_string_pretty(&gw).unwrap_or_default());
+                    }
+                }
+            }
+        }
+    }
+
+    // 编译 feishu 扩展：网关启动时需要 extensions/feishu/dist/index.js 来桥接通道
+    let feishu_ext = PathBuf::from(&openclaw_dir).join("extensions").join("feishu");
+    if feishu_ext.join("package.json").exists() && !feishu_ext.join("dist").join("index.js").exists() {
+        let ext_dir = openclaw_dir.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            hidden_cmd::cmd()
+                .current_dir(&ext_dir)
+                .args(["/C", "npx", "-y", "typescript", "tsc", "-p", "extensions/feishu/tsconfig.json", "--skipLibCheck"])
+                .output()
+        }).await;
+        match result {
+            Ok(Ok(o)) if o.status.success() => info!("飞书扩展编译成功"),
+            Ok(Ok(o)) => warn!("飞书扩展编译失败: {}", String::from_utf8_lossy(&o.stderr)),
+            _ => warn!("飞书扩展编译任务异常（非致命）"),
+        }
+    }
+
     info!("OpenClaw-CN 安装完成");
     Ok(progress)
+}
+
+/// 将 openclaw-cn 的默认 Bonjour/gateway 名称 "Clawdbot" 替换为 "快泛助手"
+async fn patch_gateway_bonjour_name(openclaw_dir: &str) -> Result<(), String> {
+    let candidates = vec![
+        "dist/gateway/server/bonjour.js",
+        "dist/gateway/bonjour.js",
+        "dist/bonjour.js",
+    ];
+    for rel in &candidates {
+        let path = std::path::Path::new(openclaw_dir).join(rel);
+        if !path.exists() { continue; }
+        let content = tokio::fs::read_to_string(&path).await
+            .map_err(|e| format!("读取 {} 失败: {}", &rel, e))?;
+        if !content.contains("Clawdbot") { continue; }
+        let replaced = content.replace("Clawdbot", "快泛助手");
+        tokio::fs::write(&path, replaced).await
+            .map_err(|e| format!("写入 {} 失败: {}", rel, e))?;
+        info!("已汉化网关名称: {}", rel);
+        return Ok(());
+    }
+    Ok(())
 }
 
 // ─── Post-install patches for broken modules in openclaw-cn npm package ───────────

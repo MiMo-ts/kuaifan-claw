@@ -154,7 +154,8 @@ fn read_all_robot_ids_from_instances_yaml(data_dir: &str) -> HashSet<String> {
     };
     #[derive(serde::Deserialize)]
     struct InstRow {
-        robot_id: String,
+        #[serde(default)]
+        robot_id: Option<String>,
     }
     #[derive(serde::Deserialize)]
     struct Doc {
@@ -165,7 +166,7 @@ fn read_all_robot_ids_from_instances_yaml(data_dir: &str) -> HashSet<String> {
         Ok(d) => d,
         Err(_) => return HashSet::new(),
     };
-    doc.instances.into_iter().map(|i| i.robot_id).collect()
+    doc.instances.into_iter().filter_map(|i| i.robot_id).collect()
 }
 
 /// 旧版曾把 `agent_id` 当作 workspace 路径段，在 `robots/` 下生成 `inst_*`、`wecom-inst_*` 等目录；
@@ -326,7 +327,8 @@ fn read_channel_patches(data_dir: &str) -> (Option<serde_json::Value>, Vec<Manag
         id: String,
         enabled: bool,
         name: String,
-        robot_id: String,
+        #[serde(default)]
+        robot_id: Option<String>,
         channel_type: String,
         #[serde(default)]
         channel_config: serde_json::Value,
@@ -748,7 +750,7 @@ pub struct ManagerAccount {
     pub instance_id: String,
     pub instance_name: String,
     #[allow(dead_code)]
-    pub robot_id: String,
+    pub robot_id: Option<String>,
     pub model_ref: Option<String>,
     pub channel_type: String,
 }
@@ -759,8 +761,8 @@ pub type ManagerFeishuAccount = ManagerAccount;
 
 /// Agent 工作区目录：`data/robots/{robot_id}`（与向导里选的机器人模板一致）。
 /// 不得使用 `agent_id`（飞书多为 `inst_*`，单账号通道为 `wecom-inst_*` 等），否则会指到空目录导致无法回复。
-fn robot_workspace_path(data_dir: &str, robot_id: &str) -> Option<String> {
-    let rid = robot_id.trim();
+fn robot_workspace_path(data_dir: &str, robot_id: Option<&str>) -> Option<String> {
+    let rid = robot_id.map(|s| s.trim()).unwrap_or("");
     if rid.is_empty() || rid.contains("..") || rid.contains('/') || rid.contains('\\') {
         return None;
     }
@@ -774,7 +776,7 @@ fn robot_workspace_path(data_dir: &str, robot_id: &str) -> Option<String> {
 }
 
 fn agent_workspace_for_manager_account(data_dir: &str, acct: &ManagerAccount) -> String {
-    robot_workspace_path(data_dir, &acct.robot_id).unwrap_or_else(|| {
+    robot_workspace_path(data_dir, acct.robot_id.as_deref()).unwrap_or_else(|| {
         PathBuf::from(data_dir)
             .join("robots")
             .join(&acct.agent_id)
@@ -810,7 +812,7 @@ fn sync_agent_workspace_soul(data_dir: &str, acct: &ManagerAccount) {
         warn!("创建 agent workspace 目录失败 {:?}: {}", dir, e);
         return;
     }
-    let text = get_robot_system_prompt(&acct.robot_id);
+    let text = get_robot_system_prompt(acct.robot_id.as_deref().unwrap_or(""));
     let soul_path = dir.join("SOUL.md");
     if let Err(e) = std::fs::write(&soul_path, text) {
         warn!("写入 SOUL.md 失败 {:?}: {}", soul_path, e);
@@ -1247,6 +1249,40 @@ fn yaml_to_u16(v: &serde_yaml::Value) -> Option<u16> {
         .or_else(|| v.as_i64().and_then(|i| i.try_into().ok()))
 }
 
+/// 从 instances.yaml 读取飞书凭证 (appId, appSecret)
+fn read_feishu_credentials_from_instances(data_dir: &str) -> (Option<String>, Option<String>) {
+    let inst_path = PathBuf::from(data_dir).join("config").join("instances.yaml");
+    let raw = match std::fs::read_to_string(&inst_path) {
+        Ok(s) => s,
+        Err(_) => return (None, None),
+    };
+    let doc: serde_yaml::Value = match serde_yaml::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return (None, None),
+    };
+    let instances = doc.get("instances").and_then(|v| v.as_sequence());
+    let Some(instances) = instances else { return (None, None); };
+    for inst in instances {
+        if inst.get("channel_type").and_then(|v| v.as_str()) != Some("feishu") {
+            continue;
+        }
+        let app_id = inst
+            .get("channel_config")
+            .and_then(|c| c.get("appId"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let app_secret = inst
+            .get("channel_config")
+            .and_then(|c| c.get("appSecret"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if app_id.is_some() || app_secret.is_some() {
+            return (app_id, app_secret);
+        }
+    }
+    (None, None)
+}
+
 fn gateway_bind_from_host(host: &str) -> (serde_json::Value, Option<String>) {
     let h = host.trim().to_lowercase();
     if h == "127.0.0.1" || h == "localhost" || h == "::1" {
@@ -1605,14 +1641,8 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
         );
     }
 
-    // 与 openclaw-cn `dist/config/port-defaults.js` / `dist/browser/config.js` 一致：
-    //   browser 控制服务端口 = gateway.port + 2
-    //   Chrome 扩展中继（HTTP/WS，供扩展连接）= 控制端口 + 1（即 gateway + 3，如 8080→8082→8083）
-    // 管理端此前未写入 `browser` 时，默认仅有 clawd CDP 配置，网关侧 `ensureExtensionRelayForProfiles`
-    // 不会为 `driver=extension` 拉起中继 → 8083 不监听、扩展无法连接。
-    // 此处强制同步启用并声明 `profiles.chrome` 和 `profiles.edge`，保证中继随「启动网关」一并就绪。
+    // 浏览器配置：使用内置 clawd 驱动（CDP 模式），无需安装浏览器扩展
     let browser_control_port = port.saturating_add(2);
-    let browser_relay_port = browser_control_port.saturating_add(1);
     merge_json_deep(
         &mut patch,
         json!({
@@ -1621,15 +1651,10 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
                 "defaultProfile": "clawd",
                 "controlUrl": format!("http://127.0.0.1:{browser_control_port}"),
                 "profiles": {
-                    "chrome": {
-                        "driver": "extension",
-                        "cdpUrl": format!("http://127.0.0.1:{browser_relay_port}"),
-                        "color": "#00AA00"
-                    },
-                    "edge": {
-                        "driver": "extension",
-                        "cdpUrl": format!("http://127.0.0.1:{browser_relay_port}"),
-                        "color": "#0078D4"
+                    "clawd": {
+                        "driver": "clawd",
+                        "cdpUrl": format!("http://127.0.0.1:{browser_control_port}"),
+                        "color": "#5b7fbd"
                     }
                 }
             }
@@ -1720,14 +1745,108 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
         .collect();
     // 遍历 CHANNEL_META：检查每个单账号通道是否有已启用实例，统一处理 enabled 的写回
     sync_disable_stale_single_account_channels(&mut base, &enabled_channel_ids);
-    // 设置 plugins.load.paths 指向用户插件目录 (统一使用正斜杠)
-    let plugins_dir = data_dir.trim_end_matches(|c| c == '/' || c == '\\').to_string() + "/plugins";
+
+    // 飞书有凭证时强制启用通道（扫码绑定后实例尚未创建也需生效）
+    // 先从 instances.yaml 读取飞书凭证（独立于 openclaw.json 的 channels 状态）
+    let feishu_creds = read_feishu_credentials_from_instances(data_dir);
+    if let Some(ch) = base.get_mut("channels").and_then(|c| c.as_object_mut()) {
+        // 确保飞书通道条目存在
+        if !ch.contains_key("feishu") {
+            ch.insert("feishu".into(), serde_json::json!({
+                "enabled": true,
+            }));
+        }
+        if let Some(fs) = ch.get_mut("feishu").and_then(|c| c.as_object_mut()) {
+            // 从 instances.yaml 补充凭证
+            if let Some(ref app_id) = feishu_creds.0 {
+                if !app_id.is_empty() && fs.get("appId").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+                    fs.insert("appId".into(), serde_json::json!(app_id));
+                }
+            }
+            if let Some(ref app_secret) = feishu_creds.1 {
+                if !app_secret.is_empty() && fs.get("appSecret").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+                    fs.insert("appSecret".into(), serde_json::json!(app_secret));
+                }
+            }
+            let has_creds = fs.get("appId").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+            if has_creds {
+                let currently = fs.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                if !currently {
+                    fs.insert("enabled".into(), serde_json::Value::Bool(true));
+                    info!("飞书已有凭证，强制启用 channels.feishu.enabled = true");
+                }
+            }
+
+            // 合并 pending account 中的 allowFrom 到对应实例 account
+            if let Some(accts) = fs.get_mut("accounts").and_then(|a| a.as_object_mut()) {
+                let allow_from_map: std::collections::HashMap<String, Vec<String>> = accts
+                    .iter()
+                    .filter(|(k, _)| k.starts_with("pending_"))
+                    .filter_map(|(_, v)| {
+                        let app_id = v.get("appId").and_then(|a| a.as_str()).map(|s| s.to_string())?;
+                        let allow: Vec<String> = v.get("allowFrom")
+                            .and_then(|a| a.as_array())
+                            .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                            .unwrap_or_default();
+                        if allow.is_empty() { None } else { Some((app_id, allow)) }
+                    })
+                    .collect();
+
+                if !allow_from_map.is_empty() {
+                    for (_, v) in accts.iter_mut() {
+                        let inst_app_id = v.get("appId").and_then(|a| a.as_str()).unwrap_or("").to_string();
+                        if inst_app_id.is_empty() { continue; }
+                        if let Some(pending_allow) = allow_from_map.get(&inst_app_id) {
+                            let existing_allow: Vec<String> = v.get("allowFrom")
+                                .and_then(|a| a.as_array())
+                                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                                .unwrap_or_default();
+                            let mut merged = existing_allow.clone();
+                            for oid in pending_allow {
+                                if !merged.contains(oid) { merged.push(oid.clone()); }
+                            }
+                            if merged.len() > existing_allow.len() {
+                                if let Some(o) = v.as_object_mut() {
+                                    o.insert("allowFrom".into(), serde_json::json!(merged));
+                                }
+                                info!("已合并 pending allowFrom 到 feishu account {}", inst_app_id.chars().take(12).collect::<String>());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 设置 plugins.load.paths：扩展目录 + 用户插件目录（统一正斜杠，避免 Windows 混用）
+    // 飞书等通道通过 extensions/ 下的 openclaw.plugin.json 注册，必须在此路径列表中才能被发现和启动
+    let data_root = data_dir.trim_end_matches(|c| c == '/' || c == '\\').replace('\\', "/");
+    let ext_dir = format!("{}/openclaw-cn/extensions", data_root);
+    let plugins_dir = format!("{}/plugins", data_root);
     if let Some(pl) = base.get_mut("plugins") {
         if let Some(obj) = pl.as_object_mut() {
-            obj.insert("load".to_string(), json!({"paths": [&plugins_dir]}));
+            obj.insert("load".to_string(), json!({"paths": [&ext_dir, &plugins_dir]}));
         }
     }
     // plugins.entries 由网关自动管理，不手动写入
+    // 但网关可能产生重复条目，去重避免刷屏警告和启动延迟
+    if let Some(plugins) = base.get_mut("plugins") {
+        if let Some(entries) = plugins.get_mut("entries") {
+            if let Some(obj) = entries.as_object_mut() {
+                // 按 plugin id 去重：同名 key 只保留第一个
+                let before = obj.len();
+                let deduped: serde_json::Map<String, serde_json::Value> = obj
+                    .iter()
+                    .fold(serde_json::Map::new(), |mut acc, (k, v)| {
+                        acc.entry(k.clone()).or_insert_with(|| v.clone());
+                        acc
+                    });
+                *obj = deduped;
+                if obj.len() != before {
+                    info!("已去重 plugins.entries: {} → {}", before, obj.len());
+                }
+            }
+        }
+    }
 
     let pretty = serde_json::to_string_pretty(&base)
         .map_err(|e| format!("序列化 openclaw.json 失败: {}", e))?;
@@ -2402,67 +2521,48 @@ fn gateway_listen_ports_to_clear(main: u16) -> Vec<u16> {
     v
 }
 
-/// Windows：结束占用指定 TCP 端口的监听进程（用于 PID 已失效或 taskkill 未杀干净时）。
+/// Windows：批量清除多个端口的监听进程（单次 PowerShell + netstat，合并调用减少延迟）。
 #[cfg(windows)]
-fn kill_windows_processes_listening_on_port(port: u16) {
+fn kill_windows_gateway_listen_ports_batch(ports: &[u16]) {
+    // 方法1：单次 PowerShell 清理所有端口
+    let port_list = ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
     let ps = format!(
         "$ErrorActionPreference='SilentlyContinue'; \
-         Get-NetTCPConnection -LocalPort {} -State Listen -ErrorAction SilentlyContinue | \
-         ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}",
-        port
+         $ports = @({}); \
+         foreach ($p in $ports) {{ \
+           Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | \
+             ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }} \
+         }}",
+        port_list
     );
-    let out = hidden_cmd::powershell()
+    let _ = hidden_cmd::powershell()
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
         .output();
-    if let Ok(o) = &out {
-        if !o.status.success() {
-            tracing::warn!(
-                "按端口 {} 清理监听进程(PowerShell)未完全成功: {}",
-                port,
-                String::from_utf8_lossy(&o.stderr).trim()
-            );
-        }
-    }
-}
 
-/// Windows：`Get-NetTCPConnection` 在部分环境不可用或拿不到 OwningProcess 时，用 netstat 解析 PID 再 taskkill。
-#[cfg(windows)]
-fn kill_windows_processes_listening_on_port_netstat_fallback(port: u16) {
+    // 方法2：netstat 兜底
     let out = hidden_cmd::cmd()
-        .args(["/C", &format!("netstat -ano | findstr :{}", port)])
+        .args(["/C", &format!("netstat -ano | findstr \"{}\"", ports.iter().map(|p| format!(":{}", p)).collect::<Vec<_>>().join(" "))])
         .output();
-    let Ok(o) = out else {
-        return;
-    };
-    if !o.status.success() {
-        return;
-    }
-    let text = String::from_utf8_lossy(&o.stdout);
-    let mut pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    for line in text.lines() {
-        let upper = line.to_uppercase();
-        if !upper.contains("LISTENING") {
-            continue;
-        }
-        if let Some(pid_str) = line.split_whitespace().last() {
-            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                if pid > 0 {
-                    pids.insert(pid);
+    if let Ok(o) = out {
+        if o.status.success() {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let mut pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            for line in text.lines() {
+                if !line.to_uppercase().contains("LISTENING") { continue; }
+                if let Some(pid_str) = line.split_whitespace().last() {
+                    if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                        if pid > 0 { pids.insert(pid); }
+                    }
                 }
+            }
+            if !pids.is_empty() {
+                let pid_list = pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" ");
+                let _ = hidden_cmd::cmd()
+                    .args(["/C", &format!("taskkill /F /T /PID {}", pid_list)])
+                    .output();
             }
         }
     }
-    for pid in pids {
-        let _ = hidden_cmd::cmd()
-            .args(["/C", &format!("taskkill /PID {} /F /T", pid)])
-            .output();
-    }
-}
-
-#[cfg(windows)]
-fn kill_windows_gateway_listen_ports_all_methods(port: u16) {
-    kill_windows_processes_listening_on_port(port);
-    kill_windows_processes_listening_on_port_netstat_fallback(port);
 }
 
 /// Unix：按端口结束 LISTEN 进程（无 lsof 时静默跳过）
@@ -2552,22 +2652,21 @@ fn stop_gateway_processes_best_effort(data_dir: &str) {
     let status_file = format!("{}/gateway.status", data_dir);
     let port = resolve_gateway_http_port(data_dir);
 
-    // 第一步：按端口清理所有残留监听（无状态文件时也执行，确保关闭网关时子进程全清）
+    // 批量端口清理（单次 PowerShell + netstat 合并调用）
+    let ports_to_clear = gateway_listen_ports_to_clear(port);
     #[cfg(windows)]
     {
-        for p in gateway_listen_ports_to_clear(port) {
-            kill_windows_gateway_listen_ports_all_methods(p);
-        }
+        kill_windows_gateway_listen_ports_batch(&ports_to_clear);
     }
 
     #[cfg(not(windows))]
     {
-        for p in gateway_listen_ports_to_clear(port) {
-            kill_unix_listeners_on_port(p);
+        for p in &ports_to_clear {
+            kill_unix_listeners_on_port(*p);
         }
     }
 
-    // 第二步：按状态文件 PID 再杀一次（覆盖第一步未清的边缘情况）
+    // 按状态文件 PID 清理进程树
     if let Ok(content) = std::fs::read_to_string(&status_file) {
         if let Some(pid_str) = content.strip_prefix("pid:") {
             if let Ok(pid) = pid_str.trim().parse::<u32>() {
@@ -2576,15 +2675,10 @@ fn stop_gateway_processes_best_effort(data_dir: &str) {
                     let out = hidden_cmd::cmd()
                         .args(["/C", &format!("taskkill /PID {} /F /T", pid)])
                         .output();
-                    match out {
-                        Ok(o) if o.status.success() => {
+                    if let Ok(o) = &out {
+                        if o.status.success() {
                             tracing::info!("已结束网关进程树 PID {}", pid);
                         }
-                        Ok(o) => {
-                            let err = String::from_utf8_lossy(&o.stderr);
-                            tracing::warn!("taskkill PID {} 未成功: {}", pid, err.trim());
-                        }
-                        Err(e) => tracing::warn!("taskkill 调用失败: {}", e),
                     }
                 }
                 #[cfg(not(windows))]
@@ -2592,21 +2686,6 @@ fn stop_gateway_processes_best_effort(data_dir: &str) {
                     let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
                 }
             }
-        }
-    }
-
-    // 第三步：再次按端口兜底清理（覆盖 /T 未能完全清掉的子进程）
-    #[cfg(windows)]
-    {
-        for p in gateway_listen_ports_to_clear(port) {
-            kill_windows_gateway_listen_ports_all_methods(p);
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        for p in gateway_listen_ports_to_clear(port) {
-            kill_unix_listeners_on_port(p);
         }
     }
 
@@ -2835,16 +2914,23 @@ await import("./entry.js");
         tracing::warn!("Windows .bat/cmd exec 规范化补丁未应用: {}", e);
     }
 
+    // 清理旧版遗留的 data/plugins/feishu（飞书由网关内置 dist/feishu/ 原生支持，不应存在于此）
+    let legacy_feishu = PathBuf::from(data_dir).join("plugins").join("feishu");
+    if legacy_feishu.is_dir() {
+        let _ = tokio::fs::remove_dir_all(&legacy_feishu).await;
+        info!("已清理旧版遗留的 plugins/feishu 目录（飞书改为网关内置支持）");
+    }
+
     // 按 instances.yaml 自动准备通道插件（复制 extensions、依赖、编译 dist），并同步 plugins.load.paths
     crate::commands::plugin::ensure_plugins_for_enabled_instances(data_dir).await;
 
-    // 启动前强制两轮「停止 + 清端口」，避免残留 node 占端口导致「未在端口监听」
-    info!("启动前：停止旧网关并清理端口（第一轮）");
-    stop_gateway_processes_best_effort(data_dir);
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    info!("启动前：停止旧网关并清理端口（第二轮）");
-    stop_gateway_processes_best_effort(data_dir);
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // 启动前清理旧网关残留进程和端口
+    let has_old_gateway = std::path::Path::new(&format!("{}/gateway.status", data_dir)).exists();
+    if has_old_gateway {
+        info!("启动前：清理旧网关残留进程和端口");
+        stop_gateway_processes_best_effort(data_dir);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 
     log_gateway_spawn_banner(data_dir);
 
@@ -2865,14 +2951,12 @@ await import("./entry.js");
         .map_err(|e| format!("写入状态文件失败: {}", e))?;
 
     let listen_port = resolve_gateway_http_port(data_dir);
-    // 约 100 × (500ms 连接超时 + 150ms 间隔) ≈ 65s 量级上限，覆盖冷启动
-    if !wait_for_local_port_listen(listen_port, 100).await {
+    // 约 200 × (500ms 连接超时 + 150ms 间隔) ≈ 130s 量级上限，覆盖冷启动及扩展加载耗时
+    if !wait_for_local_port_listen(listen_port, 200).await {
         let _ = tokio::fs::remove_file(&status_file).await;
         #[cfg(windows)]
         {
-            for p in gateway_listen_ports_to_clear(listen_port) {
-                kill_windows_gateway_listen_ports_all_methods(p);
-            }
+            kill_windows_gateway_listen_ports_batch(&gateway_listen_ports_to_clear(listen_port));
         }
         let exit_note = match child.try_wait() {
             Ok(Some(status)) => format!("网关 Node 进程已退出（退出码 {:?}）。", status.code()),
@@ -2885,7 +2969,7 @@ await import("./entry.js");
             .map(|t| format!("\n\n—— logs/{} 末尾 ——\n{}", OPENCLAW_GATEWAY_LOG, t))
             .unwrap_or_default();
         return Err(format!(
-            "启动失败：{} 当前检测端口: {}。{}\n\n若端口被占用请先「关闭网关」或结束占用该端口的程序；若进程已崩溃请根据上方日志排查 openclaw.json / 模型配置 / Node 版本（需 ≥22）。仍失败请检查防火墙。",
+            "启动失败：{} 当前检测端口: {}。{}\n\n首次启动网关因扩展插件加载耗时较长，最多等待约 2 分钟。若持续超时请重试；若进程已崩溃请根据上方日志排查 openclaw.json / 模型配置 / Node 版本（需 ≥22）。仍失败请检查防火墙。",
             exit_note, listen_port, log_tail
         ));
     }
@@ -2911,7 +2995,11 @@ pub async fn restart_gateway_if_running_for_wechat_config(data_dir: &str) -> Res
     }
     info!("通道配置已写入且网关正在运行：将重启网关以加载最新 openclaw.json 与插件");
     stop_gateway_processes_best_effort(data_dir);
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // 等待旧进程退出 + 端口释放（飞书等插件加载可能需数秒才能完全退出）
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    // 清除网关锁文件，避免残留锁导致 "gateway already running"
+    let lock_file = PathBuf::from(data_dir).join("openclaw-cn").join(".gateway.lock");
+    let _ = tokio::fs::remove_file(&lock_file).await;
     start_gateway_with_data_dir_path(data_dir).await?;
     Ok(())
 }

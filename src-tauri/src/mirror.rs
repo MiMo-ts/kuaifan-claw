@@ -8,8 +8,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
 use tracing::{info, warn};
 
-/// GitHub/git 外部资源拉取已全局禁止，仅使用本地内置包
-const GITHUB_BLOCKED: bool = true;
+/// GitHub/git 外部资源拉取（国内优先走镜像加速）
+const GITHUB_BLOCKED: bool = false;
 
 /// GitHub 源码包加速前缀（国内优先；OPENCLAW_GITHUB_MIRROR_PREFIXES 可追加）。
 /// ghproxy / ghproxy.net 排在最前，优先用直链代理加速；官方直连放最后兜底。

@@ -98,6 +98,9 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const pollIntervalRef = useRef(5000);
+  const successDataRef = useRef<QuickBindCompleteData | null>(null);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   const stopTimers = useCallback(() => {
     if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null; }
@@ -119,17 +122,13 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
         case 'success':
         case 'confirmed':
           stopTimers();
+          successDataRef.current = {
+            appId: result.access_token,
+            appSecret: result.client_secret,
+            authCode: result.bot_token,
+          };
           setPhase('done');
           setStatusMsg('授权成功！');
-          setTimeout(() => {
-            if (mountedRef.current) {
-              const data: QuickBindCompleteData = {};
-              if (result.access_token) data.appId = result.access_token;
-              if (result.client_secret) data.appSecret = result.client_secret;
-              if (result.bot_token) data.authCode = result.bot_token;
-              onComplete(data);
-            }
-          }, 600);
           break;
 
         case 'scanned':
@@ -164,7 +163,7 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
       // Network errors during poll are normal — keep trying
       pollTimerRef.current = setTimeout(doPoll, pollIntervalRef.current);
     }
-  }, [cfg, onComplete, stopTimers]);
+  }, [cfg, stopTimers]); // onComplete via ref, stable
 
   const scheduleNext = useCallback((delayOverride?: number) => {
     if (!mountedRef.current) return;
@@ -191,8 +190,8 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
         pollIntervalRef.current = result.interval_ms ?? 5000;
         setPhase('qr');
         setStatusMsg(cfg.scanningMsg);
-        // Auto-start polling immediately
-        scheduleNext(2000);
+        // Auto-start polling — 使用 API 返回的间隔，避免 slow_down
+        scheduleNext(result.interval_ms ?? 5000);
       } else {
         setPhase('error');
         setErrorMsg(result.error || '启动快捷绑定失败，请检查网络后重试');
@@ -226,6 +225,16 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
       setErrorMsg('QR 码已过期，请重新发起绑定');
     }
   }, [remainingSecs, phase, stopTimers]);
+
+  // Fire onComplete when phase becomes 'done' (after render commits, safe from races)
+  useEffect(() => {
+    if (phase === 'done' && successDataRef.current) {
+      const d = successDataRef.current;
+      successDataRef.current = null;
+      const t = setTimeout(() => onCompleteRef.current(d), 50);
+      return () => clearTimeout(t);
+    }
+  }, [phase]);
 
   // Lifecycle
   useEffect(() => {

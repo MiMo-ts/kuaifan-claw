@@ -68,7 +68,7 @@ const STEPS = [
 ];
 
 const CHANNELS = [
-  { id: 'feishu', name: '飞书', icon: '📨', pluginId: 'feishu' },
+  { id: 'feishu', name: '飞书（内置）', icon: '📨' },
   { id: 'wxwork', name: '企业微信', icon: '🏢', pluginId: 'wecom' },
   { id: 'wechat_clawbot', name: '微信 ClawBot', icon: '💬', pluginId: 'wechat_clawbot' },
   { id: 'qq', name: 'QQ', icon: '🐧', pluginId: 'qq' },

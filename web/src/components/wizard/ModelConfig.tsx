@@ -408,6 +408,8 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
   const [setDefault, setSetDefault] = useState(false);
+  // 选中模型后自动勾选「设为全局默认」
+  useEffect(() => { if (selectedModel) setSetDefault(true); }, [selectedModel]);
 
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -567,24 +569,20 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
         proxyUsername: proxyUsername || null,
         proxyPassword: proxyPassword || null,
       });
-      if (setDefault) {
-        const name = resolvedModelName.trim();
-        if (!name) {
-          toast.error(
-            "无法写入全局默认模型：当前未选中具体模型。请先点击下方列表中的某一模型，再保存（填写 API Key 后列表会刷新，需重新点选模型）。",
-            { duration: 7000 },
-          );
-          return false;
-        }
+
+      // 选中了模型则自动写入默认模型
+      const defaultModelName = resolvedModelName.trim();
+      if (defaultModelName) {
         await invoke("set_default_model", {
           provider: selectedProvider,
-          modelName: name,
+          modelName: defaultModelName,
         });
       }
+
       toast.success(
-        setDefault
-          ? "已保存：全局默认模型已写入配置并同步到 openclaw.json，请启动或重启网关后生效。"
-          : "供应商配置已保存",
+        defaultModelName
+          ? "已保存：默认模型 " + defaultModelName + " 已写入配置，启动或重启网关后生效。"
+          : "供应商配置已保存（未选中模型，默认模型未变）",
         { duration: 4000 },
       );
       await loadProviders();

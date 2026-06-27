@@ -163,7 +163,7 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-full" style={{ background: C.bg }}>
-      <header className="sticky top-0 z-20 backdrop-blur-md" style={{ background: 'rgba(255, 255, 255, 0.92)', borderBottom: '1px solid ' + C.borderSoft }}>
+      <header className="sticky top-0 z-20" style={{ background: C.bgElev, borderBottom: '1px solid ' + C.borderSoft }}>
         <div className="max-w-[1200px] mx-auto px-6 h-14 flex items-center gap-4">
           <button onClick={() => navigate('/home')}
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors duration-150"
@@ -366,8 +366,8 @@ export default function SettingsPage() {
             <SideCard icon={CxIconFileText} title="使用文档" desc="查看快泛 Claw 的使用说明与 API 文档" cta="打开文档" onClick={() => toast('文档功能开发中…')} />
             <SideCard icon={CxIconExternalLink} title="官网" desc="访问快泛 Claw 官网获取最新动态" cta="访问官网"
               onClick={async () => {
-                try { await invoke('open_url', { url: 'https://kuaifan.ai' }); }
-                catch { window.open('https://kuaifan.ai', '_blank'); }
+                try { await invoke('open_url', { url: 'http://kuaifanclaw.cn' }); }
+                catch { window.open('http://kuaifanclaw.cn', '_blank'); }
               }} />
 
             <div className="rounded-xl p-4 text-[10.5px] font-mono leading-relaxed"

@@ -347,7 +347,9 @@ pub(crate) async fn ensure_plugins_for_enabled_instances(data_dir: &str) {
             .get("channel_type")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        // feishu 是内置扩展 (extensions/feishu/)，不需要复制到 plugins/
+        // feishu 由网关内置 dist/feishu/ 原生支持（22个编译好的JS文件），不需要复制到 plugins/
+        // extensions/feishu/ 是可发布的 npm 包（含 src/ 源码和 package.json），与内置版功能重复
+        // 若同时加载会导致 duplicate plugin id 警告
         if ct == "feishu" {
             continue;
         }
@@ -1533,8 +1535,8 @@ pub async fn list_plugins(
     let plugins_dir = get_plugins_dir(&data_dir);
 
     // 定义可用插件列表（与 plugins.yaml 一致）
+    // feishu 由网关内置 dist/feishu/ 原生支持，不在可下载列表中
     let plugin_defs = vec![
-        ("feishu", "飞书", "📱", "飞书企业自建应用", true),
         ("wxwork", "企业微信", "📱", "企业微信自建应用", true),
         (
             "wechat_clawbot",

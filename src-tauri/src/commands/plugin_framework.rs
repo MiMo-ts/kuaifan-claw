@@ -277,9 +277,28 @@ pub fn cancel_wechat_cli_bind() -> Result<String, String> {
 }
 
 async fn try_cli_qr(data_dir: &str) -> Option<String> {
-    for cmd in &["npx", "npx.cmd", "node"] {
-        let mut c = Command::new(cmd);
-        c.args(["-y", "@tencent-weixin/openclaw-weixin-cli", "install"]).current_dir(data_dir).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // 使用内置 Node.js 环境（避免系统 PATH 中无 npx/node）
+    let (node_exe, _) = crate::env_paths::resolve_node(data_dir);
+    let npx_cmd = node_exe.parent().map(|p| p.join("npx.cmd")).filter(|p| p.exists());
+    let node_cmd = Some(node_exe.clone());
+
+    let mut cmds: Vec<(String, PathBuf)> = Vec::new();
+    if let Some(npx) = npx_cmd { cmds.push(("npx.cmd".into(), npx)); }
+    cmds.push(("node".into(), node_cmd.unwrap_or(node_exe)));
+
+    for (label, cmd_path) in &cmds {
+        let mut c = Command::new(cmd_path);
+        if label == "npx.cmd" {
+            c.args(["-y", "@tencent-weixin/openclaw-weixin-cli", "install"]);
+        } else {
+            let npm_cli = cmd_path.parent().map(|p| p.join("node_modules").join("npm").join("bin").join("npm-cli.js")).filter(|p| p.exists());
+            if let Some(npm) = npm_cli {
+                c.arg(&npm).arg("exec").arg("-y").arg("@tencent-weixin/openclaw-weixin-cli").arg("install");
+            } else {
+                continue;
+            }
+        }
+        c.current_dir(data_dir).stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(windows)] { let _ = c.creation_flags(0x08000000); }
         match c.spawn() {
             Ok(mut child) => {
@@ -287,7 +306,7 @@ async fn try_cli_qr(data_dir: &str) -> Option<String> {
                 if let Some(e) = child.stderr.as_mut() { for line in std::io::BufReader::new(e).lines().flatten() { let t = line.trim(); if t.starts_with("https://") && t.contains("qrcode=") && t.len() > 40 { tracing::info!("[pf] CLI stderr QR: {}", t); return Some(t.to_string()); } } }
                 let _ = child.kill();
             }
-            Err(e) => tracing::warn!("[pf] CLI {} 失败: {}", cmd, e),
+            Err(e) => tracing::warn!("[pf] CLI {} 失败: {}", label, e),
         }
     }
     None
@@ -644,88 +663,129 @@ async fn save_feishu_credentials_inner(
         let content = tokio::fs::read_to_string(&inst_path).await.map_err(|e| format!("读取:{}", e))?;
         let mut doc: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| format!("解析:{}", e))?;
         if let Some(instances) = doc.get_mut("instances").and_then(|i| i.as_sequence_mut()) {
+            // 只写入第一个未配置凭证的 feishu 实例（避免覆盖已有独立凭证的实例）
             for inst in instances.iter_mut() {
-                if inst.get("channel_type").and_then(|v| v.as_str()) == Some("feishu")
-                    && inst.get("enabled").and_then(|v| v.as_bool()) == Some(true)
-                {
-                    if let Some(cc) = inst.get_mut("channel_config").and_then(|c| c.as_mapping_mut()) {
-                        cc.insert(
-                            serde_yaml::Value::String("appId".into()),
-                            serde_yaml::Value::String(app_id.to_string()),
-                        );
-                        cc.insert(
-                            serde_yaml::Value::String("appSecret".into()),
-                            serde_yaml::Value::String(app_secret.to_string()),
-                        );
-                        // 自动白名单：将用户 open_id 加入 allowlist
-                        if let Some(oid) = user_open_id {
-                            if !oid.is_empty() {
-                                let current_allow = cc
-                                    .get(&serde_yaml::Value::String("allowFrom".into()))
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
-                                let mut users: Vec<&str> = current_allow
-                                    .split(',')
-                                    .map(|s| s.trim())
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
-                                if !users.contains(&oid) {
-                                    users.push(oid);
-                                    cc.insert(
-                                        serde_yaml::Value::String("allowFrom".into()),
-                                        serde_yaml::Value::String(users.join(",")),
-                                    );
-                                    tracing::info!("[pf] feishu whitelist auto-added: open_id={}", oid);
-                                }
+                if inst.get("channel_type").and_then(|v| v.as_str()) != Some("feishu") {
+                    continue;
+                }
+                if inst.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
+                    continue;
+                }
+                let has_creds = inst
+                    .get("channel_config")
+                    .and_then(|c| c.get("appId"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if has_creds {
+                    continue; // 已有凭证，跳过（保留独立绑定）
+                }
+                if let Some(cc) = inst.get_mut("channel_config").and_then(|c| c.as_mapping_mut()) {
+                    cc.insert(
+                        serde_yaml::Value::String("appId".into()),
+                        serde_yaml::Value::String(app_id.to_string()),
+                    );
+                    cc.insert(
+                        serde_yaml::Value::String("appSecret".into()),
+                        serde_yaml::Value::String(app_secret.to_string()),
+                    );
+                    // 自动白名单（写入 YAML 数组格式）
+                    if let Some(oid) = user_open_id {
+                        if !oid.is_empty() {
+                            let current_allow: Vec<String> = cc
+                                .get(&serde_yaml::Value::String("allowFrom".into()))
+                                .and_then(|v| v.as_sequence())
+                                .map(|s| s.iter().filter_map(|v| v.as_str().map(|x| x.to_string())).collect())
+                                .unwrap_or_default();
+                            let mut users = current_allow.clone();
+                            if !users.contains(&oid.to_string()) {
+                                users.push(oid.to_string());
+                                cc.insert(
+                                    serde_yaml::Value::String("allowFrom".into()),
+                                    serde_yaml::Value::Sequence(
+                                        users.iter().map(|u| serde_yaml::Value::String(u.clone())).collect()
+                                    ),
+                                );
+                                tracing::info!("[pf] feishu whitelist auto-added: open_id={}", oid);
                             }
                         }
                     }
-                    let h = "# 实例配置\n# 实例 = 机器人 + 聊天通道 + 模型\n\n";
-                    let b = serde_yaml::to_string(&doc).map_err(|e| format!("序列化:{}", e))?;
-                    tokio::fs::write(&inst_path, format!("{}{}", h, b)).await.map_err(|e| format!("写入:{}", e))?;
-                    break;
                 }
+                let h = "# 实例配置\n# 实例 = 机器人 + 聊天通道 + 模型\n\n";
+                let b = serde_yaml::to_string(&doc).map_err(|e| format!("序列化:{}", e))?;
+                tokio::fs::write(&inst_path, format!("{}{}", h, b)).await.map_err(|e| format!("写入:{}", e))?;
+                break;
             }
         }
     }
 
-    // 写入 openclaw.json
+    // 写入 openclaw.json（每个实例独立 account 条目，不覆盖已有实例的凭证）
     let oc_path = PathBuf::from(data_dir).join("openclaw-cn").join("openclaw.json");
     if oc_path.exists() {
         let content = tokio::fs::read_to_string(&oc_path).await.map_err(|e| format!("读取:{}", e))?;
         let mut gw: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("解析:{}", e))?;
         if let Some(ch) = gw.get_mut("channels").and_then(|c| c.as_object_mut()) {
+            if !ch.contains_key("feishu") {
+                ch.insert("feishu".into(), serde_json::json!({
+                    "enabled": true,
+                    "accounts": {},
+                }));
+            }
             if let Some(fs) = ch.get_mut("feishu").and_then(|c| c.as_object_mut()) {
-                fs.insert("appId".into(), serde_json::json!(app_id));
-                fs.insert("appSecret".into(), serde_json::json!(app_secret));
-                // 自动白名单
-                if let Some(oid) = user_open_id {
-                    if !oid.is_empty() {
-                        let current_fs_allow = fs
-                            .get("allowFrom")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let mut fs_users: Vec<&str> = current_fs_allow
-                            .split(',')
-                            .map(|s| s.trim())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                        if !fs_users.contains(&oid) {
-                            fs_users.push(oid);
-                            fs.insert("allowFrom".into(), serde_json::json!(fs_users.join(",")));
+                fs.insert("enabled".into(), serde_json::json!(true));
+                // 读 instances.yaml 找到刚写入的实例 ID，写入独立 account 条目
+                let mut wrote_account = false;
+                if let Ok(inst_content) = tokio::fs::read_to_string(&inst_path).await {
+                    if let Ok(inst_doc) = serde_yaml::from_str::<serde_yaml::Value>(&inst_content) {
+                        if let Some(inst_list) = inst_doc.get("instances").and_then(|i| i.as_sequence()) {
+                            for inst in inst_list {
+                                let ct = inst.get("channel_type").and_then(|v| v.as_str()).unwrap_or("");
+                                if ct != "feishu" { continue; }
+                                let inst_app_id = inst.get("channel_config").and_then(|c| c.get("appId")).and_then(|v| v.as_str()).unwrap_or("");
+                                if inst_app_id != app_id { continue; }
+                                let inst_id = inst.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                if inst_id.is_empty() { continue; }
+                                if let Some(accts) = fs.get_mut("accounts").and_then(|a| a.as_object_mut()) {
+                                    if !accts.contains_key(inst_id) {
+                                        let mut entry = serde_json::Map::new();
+                                        entry.insert("appId".into(), serde_json::json!(app_id));
+                                        entry.insert("appSecret".into(), serde_json::json!(app_secret));
+                                        if let Some(oid) = user_open_id.filter(|s| !s.is_empty()) {
+                                            entry.insert("allowFrom".into(), serde_json::json!(vec![oid]));
+                                        }
+                                        accts.insert(inst_id.to_string(), serde_json::json!(entry));
+                                        tracing::info!("[pf] feishu account {} written to openclaw.json", inst_id);
+                                        wrote_account = true;
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-                if let Some(accts) = fs.get_mut("accounts").and_then(|a| a.as_object_mut()) {
-                    for a in accts.values_mut() {
-                        if let Some(o) = a.as_object_mut() {
-                            o.insert("appId".into(), serde_json::json!(app_id));
-                            o.insert("appSecret".into(), serde_json::json!(app_secret));
-                            if let Some(oid) = user_open_id {
-                                if !oid.is_empty() {
-                                    o.insert("allowFrom".into(), serde_json::json!(oid));
-                                }
+                // 兜底：实例尚未创建时，写入独立暂存 account（不覆盖已有实例的全局凭证）
+                if !wrote_account {
+                    // 检查是否已有全局凭证（说明已有实例在用），如有则不要覆盖
+                    let has_existing_global = fs.get("appId").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+                    if !has_existing_global || fs.get("accounts").and_then(|a| a.as_object()).map(|a| a.is_empty()).unwrap_or(true) {
+                        // 无已有实例 → 存全局兜底
+                        fs.insert("appId".into(), serde_json::json!(app_id));
+                        fs.insert("appSecret".into(), serde_json::json!(app_secret));
+                        if let Some(oid) = user_open_id.filter(|s| !s.is_empty()) {
+                            fs.insert("allowFrom".into(), serde_json::json!(vec![oid]));
+                        }
+                    }
+                    // 无论全局如何，都创建独立 pending account 条目
+                    if let Some(accts) = fs.get_mut("accounts").and_then(|a| a.as_object_mut()) {
+                        let pending_key = format!("pending_{}", app_id.chars().take(10).collect::<String>());
+                        if !accts.contains_key(&pending_key) {
+                            let mut entry = serde_json::Map::new();
+                            entry.insert("appId".into(), serde_json::json!(app_id));
+                            entry.insert("appSecret".into(), serde_json::json!(app_secret));
+                            if let Some(oid) = user_open_id.filter(|s| !s.is_empty()) {
+                                entry.insert("allowFrom".into(), serde_json::json!(vec![oid]));
                             }
+                            accts.insert(pending_key, serde_json::json!(entry));
                         }
                     }
                 }
