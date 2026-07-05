@@ -57,7 +57,7 @@ fn openclaw_core_ready(openclaw_dir: &str) -> bool {
         .is_file()
 }
 
-/// `npm/pnpm install` 是否已实质完成（避免每次向导都全量重装 node_modules）。
+/// `npm install` 是否已实质完成（避免每次向导都全量重装 node_modules）。
 fn openclaw_deps_ready(openclaw_dir: &str) -> bool {
     let nm = Path::new(openclaw_dir).join("node_modules");
     if !nm.is_dir() {
@@ -500,41 +500,6 @@ async fn try_install_homebrew_ghproxy() -> Result<String, String> {
         Ok("Homebrew 安装成功（科大讯飞备用源），请重启终端后运行 `brew doctor` 验证".to_string())
     } else {
         Err("科大讯飞备用源安装失败".to_string())
-    }
-}
-
-// 安装 pnpm
-#[tauri::command]
-pub async fn install_pnpm(app: AppHandle) -> Result<String, String> {
-    info!("开始安装 pnpm...");
-
-    emit(
-        &app,
-        InstallProgressEvent::started("pnpm", "正在安装 pnpm..."),
-    );
-
-    #[cfg(windows)]
-    let output = hidden_cmd::cmd()
-        .args(["/C", "npm", "install", "-g", "pnpm"])
-        .output()
-        .map_err(|e| format!("执行失败: {}", e))?;
-
-    #[cfg(not(windows))]
-    let output = Command::new("npm")
-        .args(["install", "-g", "pnpm"])
-        .output()
-        .map_err(|e| format!("执行失败: {}", e))?;
-
-    if output.status.success() {
-        emit(
-            &app,
-            InstallProgressEvent::finished("pnpm", "pnpm 安装完成"),
-        );
-        Ok("pnpm 安装成功".to_string())
-    } else {
-        let error = String::from_utf8_lossy(&output.stderr);
-        emit(&app, InstallProgressEvent::failed("pnpm", &error));
-        Err(format!("pnpm 安装失败: {}", error))
     }
 }
 
@@ -1058,13 +1023,9 @@ async fn run_npm_install_for_background(
 ) -> Result<(), String> {
     let (node_exe, npm_cli, npm_cmd, _, _) =
         resolve_npm_exe_with_version(data_base, prefer_system);
-    let pnpm_path = find_pnpm_executable();
-    let use_pnpm = pnpm_path.is_some();
 
     let mut args = vec!["install".to_string()];
-    if !use_pnpm {
-        args.push("--legacy-peer-deps".to_string());
-    }
+    args.push("--legacy-peer-deps".to_string());
     if !allow_scripts {
         args.push("--ignore-scripts".to_string());
     }
@@ -1076,20 +1037,9 @@ async fn run_npm_install_for_background(
     let node_exe_owned = node_exe.clone();
     let npm_cmd_owned = npm_cmd.clone();
     let npm_cli_owned = npm_cli.clone();
-    let pnpm_path_owned = pnpm_path.clone();
 
     let output_result = tokio::task::spawn_blocking(move || {
-        if let Some(ref pp) = pnpm_path_owned {
-            // pnpm 通过 cmd /c 隐藏窗口
-            let mut c = hidden_cmd::cmd();
-            c.arg("/C")
-                .arg(&*pp.to_string_lossy())
-                .current_dir(&openclaw_dir_owned)
-                .env("PATH", &deps_env_path)
-                .env("npm_config_registry", &registry_owned)
-                .args(&args);
-            c.output()
-        } else if let Some(ref cli) = npm_cli_owned {
+        if let Some(ref cli) = npm_cli_owned {
             // npm-cli.js 通过 cmd /c 隐藏窗口
             let mut c = hidden_cmd::cmd();
             c.arg("/C")
@@ -1365,79 +1315,6 @@ fn find_npm_cmd_full_path() -> Option<PathBuf> {
     {
         Command::new("which")
             .arg("npm")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .next()
-                    .map(|l| PathBuf::from(l.trim()))
-            })
-    }
-}
-
-/// 在 GUI 进程中 PATH 常不含全局 npm/pnpm，需显式解析 pnpm 路径。
-fn find_pnpm_executable() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        let mut cmd = Command::new("where.exe");
-        if let Ok(out) = cmd.arg("pnpm.cmd").output() {
-            if out.status.success() {
-                let line = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .next()
-                    .map(|s| s.trim().to_string())?;
-                let p = PathBuf::from(line);
-                if p.is_file() {
-                    return Some(p);
-                }
-            }
-        }
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let p = PathBuf::from(appdata).join("npm").join("pnpm.cmd");
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-        None
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // macOS GUI 应用 PATH 经常不完整，直接遍历所有常见目录查找
-        let common_pnpm_paths = [
-            "/usr/local/bin/pnpm",              // 官网 pkg 安装
-            "/opt/homebrew/bin/pnpm",          // Homebrew 安装
-            "/opt/homebrew/opt/pnpm/bin/pnpm",
-            "/opt/local/bin/pnpm",              // MacPorts
-            "/usr/local/opt/pnpm/bin/pnpm",    // 常用备选
-        ];
-        for p in &common_pnpm_paths {
-            let path = Path::new(p);
-            if path.is_file() {
-                tracing::info!("find_pnpm_executable 找到 pnpm: {}", p);
-                return Some(PathBuf::from(p));
-            }
-        }
-        // 搜索 ~/.nvm/versions/node/*/bin/pnpm
-        if let Ok(home) = std::env::var("HOME") {
-            let nvm_dir = PathBuf::from(&home).join(".nvm").join("versions").join("node");
-            if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
-                for entry in entries.flatten() {
-                    let pnpm_path = entry.path().join("bin").join("pnpm");
-                    if pnpm_path.is_file() {
-                        tracing::info!("find_pnpm_executable 找到 nvm pnpm: {}", pnpm_path.display());
-                        return Some(pnpm_path);
-                    }
-                }
-            }
-        }
-        None
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("which")
-            .arg("pnpm")
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -1935,7 +1812,7 @@ pub async fn install_openclaw(
         progress.push(InstallProgress {
             step: "openclaw-deps".to_string(),
             progress: 100.0,
-            message: "当前依赖已就绪，跳过 npm/pnpm install".to_string(),
+            message: "当前依赖已就绪，跳过 npm install".to_string(),
             status: "skipped".to_string(),
         });
         progress.push(InstallProgress {
@@ -2053,7 +1930,7 @@ pub async fn install_openclaw(
                     step: "openclaw-pkg".to_string(),
                     progress: 100.0,
                     message: format!(
-                        "内置包解压完成（{}），node_modules 将在下一步通过 npm/pnpm install 生成",
+                        "内置包解压完成（{}），node_modules 将在下一步通过 npm install 生成",
                         pkg_name
                     ),
                     status: "success".to_string(),
@@ -2159,7 +2036,7 @@ pub async fn install_openclaw(
             &app,
             InstallProgressEvent::finished(
                 "openclaw-deps",
-                "检测到 node_modules 已就绪，跳过 pnpm/npm install",
+                "检测到 node_modules 已就绪，跳过 npm install",
             ),
         );
         progress.push(InstallProgress {
@@ -2173,18 +2050,14 @@ pub async fn install_openclaw(
             &app,
             InstallProgressEvent::started(
                 "openclaw-deps",
-                "正在执行依赖安装（npm/pnpm install，仓库较大时可能需数分钟）…",
+                "正在执行依赖安装（npm install，仓库较大时可能需数分钟）…",
             ),
         );
 
         let (node_exe, npm_cli, npm_cmd, _, _) =
             resolve_npm_exe_with_version(&data_base, cfg_prefer_system);
-        let pnpm_path = find_pnpm_executable();
-        let pnpm_path_for_fallback = pnpm_path.clone();
-        let use_pnpm = pnpm_path.is_some();
-
         let mut args = vec!["install".to_string()];
-        if !use_pnpm && cfg_legacy_peer {
+        if cfg_legacy_peer {
             args.push("--legacy-peer-deps".to_string());
         }
         if !cfg_allow_scripts {
@@ -2194,11 +2067,8 @@ pub async fn install_openclaw(
         let registry_for_deps = cfg_registry.trim().to_string();
         // 构建子进程 PATH：prepend 自包含 Node/Git，避免生命周期脚本（postinstall 等）找不到 node/git
         let deps_env_path = build_deps_env_path(&data_base);
-        let deps_env_path_clone = deps_env_path.clone();
 
-        let deps_hint = if let Some(ref pp) = pnpm_path {
-            format!("pnpm {}", pp.display())
-        } else if npm_cli.is_some() {
+        let deps_hint = if npm_cli.is_some() {
             format!("{} + npm-cli.js", node_exe.display())
         } else {
             format!("npm {}", npm_cmd.display())
@@ -2229,12 +2099,7 @@ pub async fn install_openclaw(
                 }
             };
 
-            if let Some(ref pp) = pnpm_path {
-                let mut c = Command::new(pp);
-                c.current_dir(&openclaw_dir_for_task).args(&args);
-                apply_env(&mut c);
-                c.output()
-            } else if let Some(ref cli) = npm_cli {
+            if let Some(ref cli) = npm_cli {
                 let mut c = Command::new(&node_exe);
                 c.arg(cli).current_dir(&openclaw_dir_for_task).args(&args);
                 apply_env(&mut c);
@@ -2272,84 +2137,16 @@ pub async fn install_openclaw(
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
-            // npm 失败时若有 pnpm，尝试 pnpm 兜底（不使用 spawn_blocking，避免变量已被 move）
-            if let Some(ref pp) = pnpm_path_for_fallback {
-                warn!("npm install 失败，尝试 pnpm 兜底: {}", stderr);
-                emit(
-                    &app,
-                    InstallProgressEvent::detail(
-                        "openclaw-deps",
-                        &format!(
-                            "npm install 失败（{}），尝试 pnpm 兜底...",
-                            stderr.lines().next().unwrap_or("")
-                        ),
-                    ),
-                );
-
-                let mut fb_args = vec!["install".to_string()];
-                if !cfg_allow_scripts {
-                    fb_args.push("--ignore-scripts".to_string());
-                }
-                let mut fb_cmd = Command::new(pp);
-                fb_cmd.current_dir(&openclaw_dir).args(&fb_args);
-                fb_cmd.env("PATH", &deps_env_path_clone);
-                if !cfg_registry.trim().is_empty() {
-                    fb_cmd.env("npm_config_registry", cfg_registry.trim());
-                }
-
-                let fb_out = fb_cmd
-                    .output()
-                    .map_err(|e| format!("pnpm 启动失败: {}", e))?;
-
-                if fb_out.status.success() {
-                    emit(
-                        &app,
-                        InstallProgressEvent::finished("openclaw-deps", "pnpm 兜底安装成功"),
-                    );
-                    progress.push(InstallProgress {
-                        step: "openclaw-deps".to_string(),
-                        progress: 100.0,
-                        message: "pnpm 兜底安装成功，node_modules 就绪".to_string(),
-                        status: "success".to_string(),
-                    });
-                } else {
-                    let fb_err = String::from_utf8_lossy(&fb_out.stderr);
-                    warn!("pnpm 兜底也失败: {}", fb_err);
-                    emit(&app, InstallProgressEvent::failed("openclaw-deps", &fb_err));
-                    progress.push(InstallProgress {
-                        step: "openclaw-deps".to_string(),
-                        progress: 0.0,
-                        message: format!(
-                            "npm 失败（{}），pnpm 兜底也失败: {}",
-                            stderr.lines().next().unwrap_or(""),
-                            fb_err.lines().next().unwrap_or("")
-                        ),
-                        status: "error".to_string(),
-                    });
-                    let combined = format!("{}\n{}", stderr, fb_err);
-                    let extra = npm_deps_permission_hint(&combined);
-                    return Err(format!(
-                        "npm 失败（{}），pnpm 兜底也失败: {}{}",
-                        stderr.lines().next().unwrap_or(""),
-                        fb_err.lines().next().unwrap_or(""),
-                        extra
-                    ));
-                }
-            } else {
-                warn!("依赖安装失败，无 pnpm 可兜底: {}", stderr);
-                emit(&app, InstallProgressEvent::failed("openclaw-deps", &stderr));
-                let hint = npm_deps_permission_hint(&stderr);
-                progress.push(InstallProgress {
-                    step: "openclaw-deps".to_string(),
-                    progress: 0.0,
-                    message: format!(
-                        "依赖安装失败（npm；建议安装 pnpm 或检查 app.yaml prefer_system_node）: {}",
-                        stderr
-                    ),
-                    status: "error".to_string(),
-                });
-                return Err(format!("依赖安装失败: {}{}", stderr, hint));
-            }
+            warn!("npm install 失败: {}", stderr);
+            emit(&app, InstallProgressEvent::failed("openclaw-deps", &stderr));
+            let hint = npm_deps_permission_hint(&stderr);
+            progress.push(InstallProgress {
+                step: "openclaw-deps".to_string(),
+                progress: 0.0,
+                message: format!("依赖安装失败（npm）: {}", stderr),
+                status: "error".to_string(),
+            });
+            return Err(format!("依赖安装失败 (npm): {}{}", stderr, hint));
         }
 
         emit(
@@ -2359,7 +2156,7 @@ pub async fn install_openclaw(
         progress.push(InstallProgress {
             step: "openclaw-deps".to_string(),
             progress: 100.0,
-            message: "已在 openclaw-cn 目录执行 pnpm/npm install，node_modules 就绪".to_string(),
+            message: "已在 openclaw-cn 目录执行 npm install，node_modules 就绪".to_string(),
             status: "success".to_string(),
         });
     }
@@ -2382,6 +2179,9 @@ pub async fn install_openclaw(
                 status: "success".to_string(),
             });
             info!("Patched openclaw-cn broken modules");
+            let _ = tokio::fs::write(
+                std::path::PathBuf::from(&openclaw_dir).join(".patched"), "1"
+            ).await;
         }
         Err(e) => {
             warn!("Patch openclaw broken modules failed (non-fatal): {}", e);
@@ -3207,11 +3007,178 @@ export const listProviderOnboardingAdapters = listChannelOnboardingAdapters;
         .map_err(|e| format!("写入 plugin-sdk/index.js patch 失败: {}", e))?;
     info!("Patched dist/plugin-sdk/index.js (fixed feishu re-export paths)");
 
+    // 2b. Create missing plugin-sdk sub-modules (runtime-store / channel-config-schema).
+    //     Upstream openclaw-cn npm package references these in package.json exports
+    //     but does not ship the actual .js files, causing plugins (wecom, wechat_clawbot)
+    //     to fail with "Cannot find module '.../index.js/runtime-store'" etc.
+
+    let ccs_path = format!("{}/dist/plugin-sdk/channel-config-schema.js", openclaw_dir);
+    {
+        let ccs_content = concat!(
+            "// PATCHED-BY-KUAIFANCLAW: channel-config-schema sub-module (missing from upstream dist)\n",
+            "export { buildChannelConfigSchema } from \"../channels/plugins/config-schema.js\";\n",
+        );
+        tokio::fs::write(&ccs_path, ccs_content)
+            .await
+            .map_err(|e| format!("写入 channel-config-schema.js 失败: {}", e))?;
+        info!("Created/updated dist/plugin-sdk/channel-config-schema.js");
+    }
+
+    let rts_path = format!("{}/dist/plugin-sdk/runtime-store.js", openclaw_dir);
+    {
+        let rts_content = concat!(
+            "// PATCHED-BY-KUAIFANCLAW: runtime-store sub-module (missing from upstream dist)\n",
+            "const store = new Map();\n",
+            "export function createPluginRuntimeStore(name) {\n",
+            "  const key = name || 'default';\n",
+            "  return {\n",
+            "    getRuntime: () => store.get(key),\n",
+            "    setRuntime: (v) => { store.set(key, v); },\n",
+            "  };\n",
+            "}\n",
+            "export const { getRuntime, setRuntime } = createPluginRuntimeStore('default');\n",
+        );
+        tokio::fs::write(&rts_path, rts_content)
+            .await
+            .map_err(|e| format!("写入 runtime-store.js 失败: {}", e))?;
+        info!("Created/updated dist/plugin-sdk/runtime-store.js");
+    }
+
+    // 2c. Create missing plugin-sdk sub-modules (hook-runtime / plugin-runtime).
+    let hrt_path = format!("{}/dist/plugin-sdk/hook-runtime.js", openclaw_dir);
+    {
+        let hrt_content = concat!(
+            "// PATCHED-BY-KUAIFANCLAW: hook-runtime sub-module (missing from upstream dist)\n",
+            "import { getGlobalHookRunner } from \"../plugins/hook-runner-global.js\";\n",
+            "export function fireAndForgetHook(hookName, ctx) {\n",
+            "    const runner = getGlobalHookRunner();\n",
+            "    if (!runner) return;\n",
+            "    try { runner.fireAndForget(hookName, ctx); } catch {}\n",
+            "}\n",
+            "export function buildCanonicalSentMessageHookContext(params) {\n",
+            "    return {\n",
+            "        channel: params.channel ?? \"openclaw-weixin\",\n",
+            "        accountId: params.accountId, messageId: params.messageId,\n",
+            "        chatType: params.chatType, peerId: params.peerId,\n",
+            "        text: params.text, mediaUrls: params.mediaUrls ?? [],\n",
+            "    };\n",
+            "}\n",
+            "export function toPluginMessageContext(ctx) {\n",
+            "    return {\n",
+            "        channel: ctx.channel, accountId: ctx.accountId,\n",
+            "        messageId: ctx.messageId, chatType: ctx.chatType,\n",
+            "        peerId: ctx.peerId, text: ctx.text,\n",
+            "        mediaUrls: ctx.mediaUrls ?? [],\n",
+            "    };\n",
+            "}\n",
+            "export function toPluginMessageSentEvent(ctx) {\n",
+            "    return {\n",
+            "        channel: ctx.channel, accountId: ctx.accountId,\n",
+            "        messageId: ctx.messageId, chatType: ctx.chatType,\n",
+            "        peerId: ctx.peerId, text: ctx.text, timestamp: Date.now(),\n",
+            "    };\n",
+            "}\n",
+        );
+        tokio::fs::write(&hrt_path, hrt_content)
+            .await
+            .map_err(|e| format!("写入 hook-runtime.js 失败: {}", e))?;
+        info!("Created/updated dist/plugin-sdk/hook-runtime.js");
+    }
+
+    let prt_path = format!("{}/dist/plugin-sdk/plugin-runtime.js", openclaw_dir);
+    {
+        let prt_content = concat!(
+            "// PATCHED-BY-KUAIFANCLAW: plugin-runtime sub-module (missing from upstream dist)\n",
+            "export { getGlobalHookRunner } from \"../plugins/hook-runner-global.js\";\n",
+        );
+        tokio::fs::write(&prt_path, prt_content)
+            .await
+            .map_err(|e| format!("写入 plugin-runtime.js 失败: {}", e))?;
+        info!("Created/updated dist/plugin-sdk/plugin-runtime.js");
+    }
+
+    // 2d. Copy pre-built patch files from resources/patches/ (plugin-sdk, infra, runtime).
+    if let Ok(exe) = std::env::current_exe() {
+        let patch_candidates = [
+            exe.parent().map(|p| p.join("resources").join("patches")),
+            exe.parent().map(|p| p.join("..").join("resources").join("patches")),
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("patches")),
+        ];
+        for patch_root in patch_candidates.into_iter().flatten() {
+            if !patch_root.is_dir() {
+                continue;
+            }
+            // Copy plugin-sdk patches
+            let sdk_src = patch_root.join("plugin-sdk");
+            let sdk_dst = format!("{}/dist/plugin-sdk", openclaw_dir);
+            if sdk_src.is_dir() {
+                let _ = tokio::fs::create_dir_all(&sdk_dst).await;
+                if let Ok(mut entries) = tokio::fs::read_dir(&sdk_src).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let name = entry.file_name();
+                        let src = entry.path();
+                        let dst = PathBuf::from(&sdk_dst).join(&name);
+                        if src.extension().and_then(|e| e.to_str()) == Some("js") {
+                            let _ = tokio::fs::copy(&src, &dst).await;
+                        }
+                    }
+                }
+                info!("Copied plugin-sdk patches from resources/patches/plugin-sdk");
+            }
+            // Copy infra patches
+            let infra_src = patch_root.join("infra");
+            let infra_dst = format!("{}/dist/infra", openclaw_dir);
+            if infra_src.is_dir() {
+                let _ = tokio::fs::create_dir_all(&infra_dst).await;
+                if let Ok(mut entries) = tokio::fs::read_dir(&infra_src).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let src = entry.path();
+                        let dst = PathBuf::from(&infra_dst).join(entry.file_name());
+                        let _ = tokio::fs::copy(&src, &dst).await;
+                    }
+                }
+                info!("Copied infra patches from resources/patches/infra");
+            }
+            // Copy runtime patches (includes withReplyDispatcher fix)
+            let runtime_src = patch_root.join("runtime");
+            let runtime_dst = format!("{}/dist/plugins/runtime", openclaw_dir);
+            if runtime_src.is_dir() {
+                let _ = tokio::fs::create_dir_all(&runtime_dst).await;
+                if let Ok(mut entries) = tokio::fs::read_dir(&runtime_src).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let src = entry.path();
+                        let dst = PathBuf::from(&runtime_dst).join(entry.file_name());
+                        let _ = tokio::fs::copy(&src, &dst).await;
+                    }
+                }
+                info!("Copied runtime patches from resources/patches/runtime");
+            }
+            break; // found patches, stop searching
+        }
+    }
+
+    // 2e. Patch plugins/runtime/index.js — add missing withReplyDispatcher.
+    let runtime_path = format!("{}/dist/plugins/runtime/index.js", openclaw_dir);
+    if Path::new(&runtime_path).is_file() {
+        match tokio::fs::read_to_string(&runtime_path).await {
+            Ok(rt) => {
+                if !rt.contains("withReplyDispatcher") && rt.contains("resolveEnvelopeFormatOptions,") {
+                    let patched = rt.replace(
+                        "resolveEnvelopeFormatOptions,",
+                        "resolveEnvelopeFormatOptions,\n                withReplyDispatcher: async ({ dispatcher, run }) => {\n                    try { await run(); }\n                    finally { await dispatcher.waitForIdle(); }\n                },",
+                    );
+                    if let Err(e) = tokio::fs::write(&runtime_path, patched).await {
+                        warn!("写入 withReplyDispatcher patch 失败: {}", e);
+                    } else {
+                        info!("Patched dist/plugins/runtime/index.js (withReplyDispatcher)");
+                    }
+                }
+            }
+            Err(e) => warn!("读取 runtime/index.js 失败: {}", e),
+        }
+    }
+
     // 3. Patch fs-paths.js — fix parseSandboxBindMount to handle Windows drive letters.
-    //    Replace the whole function (marker: next export) — replacing only the opening
-    //    line would duplicate the old body and corrupt the file.
-    //    - "D:/path:/container": first ":/" at index 1 is a false positive; skip and re-search.
-    //    - "D:\path:C:\container": no ":/" substring; use /^([A-Za-z]:[^:]+):/ fallback.
     //    - cfg.binds with backslashes: normalised in docker.js (see step 4).
     let fsp_path = format!("{}/dist/agents/sandbox/fs-paths.js", openclaw_dir);
     if !Path::new(&fsp_path).is_file() {

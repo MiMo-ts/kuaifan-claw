@@ -10,6 +10,7 @@ import {
   CxIconMessageSquare,
   CxIconModels,
   CxIconModules,
+  CxIconMonitor,
   CxIconPin,
   CxIconPlus,
   CxIconSearch,
@@ -41,6 +42,7 @@ const WORKSPACE_ITEMS: SidebarNavItem[] = [
   { key: "instances", label: "实例管理", icon: CxIconInstances, path: "/instances" },
   { key: "models", label: "模型配置", icon: CxIconModels, path: "/models" },
   { key: "robots", label: "机器人商店", icon: CxIconRobots, path: "/robots" },
+  { key: "console", label: "网关控制台", icon: CxIconMonitor, path: "/console" },
 ];
 
 const INSIGHT_ITEMS: SidebarNavItem[] = [

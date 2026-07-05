@@ -813,15 +813,7 @@ pub async fn run_env_auto_fix(
         }
     }
 
-    let pnpm = check_pnpm_installation().await?;
-    if pnpm.status != EnvStatus::Success && try_npm_version_output(None).is_some() {
-        match crate::commands::installer::install_pnpm(app.clone()).await {
-            Ok(m) => messages.push(format!("pnpm: {}", m)),
-            Err(e) => messages.push(format!("pnpm 未安装或安装跳过: {}", e)),
-        }
-    } else if pnpm.status != EnvStatus::Success {
-        messages.push("pnpm: 跳过（需先可用 npm）".to_string());
-    }
+    // pnpm 非必需依赖，不再自动安装或提示
 
     if messages.is_empty() {
         messages.push("未发现需要本工具代为安装的必需项（Node/Git 已就绪）".to_string());

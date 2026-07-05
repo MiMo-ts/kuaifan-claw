@@ -207,24 +207,80 @@ pub async fn start_wechat_cli_bind(data_dir: tauri::State<'_, crate::AppState>) 
     // 先清旧状态
     if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = None; }
 
-    // 1. CLI 尝试
-    if let Some(url) = try_cli_qr(&dd).await {
-        let b64 = generate_qr_base64(&url)?;
-        let tk = url.split("qrcode=").nth(1).and_then(|s| s.split('&').next()).unwrap_or("").to_string();
-        if !tk.is_empty() {
-            if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = Some((tk.clone(), dd.clone())); }
-            return Ok(DeviceAuthStart { success: true, qr_image_base64: b64, device_code: tk, expires_in: 120, interval_ms: 2000, error: None });
-        }
-    }
+    // CLI 与 HTTP API 并行取二维码。两条路径各自 spawn 到独立 task，
+    // 结果经 oneshot channel 传回，select! borrow receiver 无取消问题。
+    let dd_cli = dd.clone();
+    let (cli_tx, mut cli_rx) = tokio::sync::oneshot::channel::<Option<String>>();
+    let (api_tx, mut api_rx) = tokio::sync::oneshot::channel::<Option<(String, String)>>();
 
-    // 2. API 获取
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().map_err(|e| format!("HTTP:{}", e))?;
-    let resp: serde_json::Value = client.get("https://ilinkai.weixin.qq.com/ilink/bot/get_bot_qrcode?bot_type=3").send().await.map_err(|e| format!("获取:{}",e))?.json().await.map_err(|e| format!("解析:{}",e))?;
-    let url = resp.get("qrcode_img_content").and_then(|v|v.as_str()).unwrap_or("").to_string();
-    let tk = resp.get("qrcode").and_then(|v|v.as_str()).unwrap_or("").to_string();
-    if url.is_empty() { return Ok(DeviceAuthStart{success:false,qr_image_base64:String::new(),device_code:String::new(),expires_in:0,interval_ms:2000,error:Some("无法获取二维码".into())}); }
-    if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = Some((tk.clone(), dd.clone())); }
-    Ok(DeviceAuthStart{success:true,qr_image_base64:generate_qr_base64(&url)?,device_code:tk,expires_in:120,interval_ms:2000,error:None})
+    // CLI 路径（后台 task，8s 超时）
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            try_cli_qr(&dd_cli),
+        ).await.ok().flatten();
+        let _ = cli_tx.send(result);
+    });
+
+    // HTTP API 路径（后台 task，10s 超时）
+    tokio::spawn(async move {
+        let result = async {
+            let client = match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .danger_accept_invalid_certs(false)
+                .build() {
+                Ok(c) => c,
+                Err(e) => { tracing::warn!("[pf] wechat qr client build failed: {}", e); return None; }
+            };
+            let resp = match client
+                .get("https://ilinkai.weixin.qq.com/ilink/bot/get_bot_qrcode?bot_type=3")
+                .header("User-Agent", "Mozilla/5.0")
+                .send().await {
+                Ok(r) => r,
+                Err(e) => { tracing::warn!("[pf] wechat qr HTTP failed: {}", e); return None; }
+            };
+            let status = resp.status();
+            let body = match resp.text().await {
+                Ok(b) => b,
+                Err(e) => { tracing::warn!("[pf] wechat qr read body failed: {}", e); return None; }
+            };
+            let v: serde_json::Value = match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(e) => { tracing::warn!("[pf] wechat qr json parse failed: {} body={}", e, &body[..body.len().min(200)]); return None; }
+            };
+            let url = v.get("qrcode_img_content").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let tk = v.get("qrcode").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            tracing::info!("[pf] wechat qr API: status={} url_len={} tk_len={}", status, url.len(), tk.len());
+            if url.is_empty() { None } else { Some((url, tk)) }
+        }.await;
+        let _ = api_tx.send(result);
+    });
+
+    // 競速：取先返回的有效结果。borrow receiver 不 move，输方可继续 await。
+    let result: Option<(String, String)> = tokio::select! {
+        cli_res = &mut cli_rx => {
+            if let Ok(Some(qr_url)) = cli_res {
+                let t = qr_url.split("qrcode=").nth(1).and_then(|s| s.split('&').next()).unwrap_or("").to_string();
+                if !t.is_empty() {
+                    if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = Some((t.clone(), dd.clone())); }
+                    return Ok(DeviceAuthStart { success: true, qr_image_base64: generate_qr_base64(&qr_url)?, device_code: t, expires_in: 120, interval_ms: 2000, error: None });
+                }
+            }
+            // CLI 未产生有效结果，等 API 侧结果
+            api_rx.await.unwrap_or(None)
+        }
+        api_res = &mut api_rx => {
+            api_res.unwrap_or(None)
+        }
+    };
+
+    match result {
+        Some((url, tk)) => {
+            if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = Some((tk.clone(), dd.clone())); }
+            Ok(DeviceAuthStart { success: true, qr_image_base64: generate_qr_base64(&url)?, device_code: tk, expires_in: 120, interval_ms: 2000, error: None })
+        }
+        None => Ok(DeviceAuthStart { success: false, qr_image_base64: String::new(), device_code: String::new(), expires_in: 0, interval_ms: 2000, error: Some("无法获取二维码，请检查网络后重试".into()) }),
+    }
 }
 
 /// 前端轮询：异步查询微信扫码状态
@@ -289,7 +345,7 @@ async fn try_cli_qr(data_dir: &str) -> Option<String> {
     for (label, cmd_path) in &cmds {
         let mut c = Command::new(cmd_path);
         if label == "npx.cmd" {
-            c.args(["-y", "@tencent-weixin/openclaw-weixin-cli", "install"]);
+            c.args(["-y", "@tencent-weixin/openclaw-weixin-cli@1.0.3", "install"]);
         } else {
             let npm_cli = cmd_path.parent().map(|p| p.join("node_modules").join("npm").join("bin").join("npm-cli.js")).filter(|p| p.exists());
             if let Some(npm) = npm_cli {
@@ -401,7 +457,11 @@ pub async fn save_wechat_bot_token_inner(data_dir: &str, bot_token: &str) -> Res
         .map_err(|e| format!("写入凭证文件:{}", e))?;
     tracing::info!("[pf] wechat credentials written to {}", cred_file.display());
 
-    let _ = crate::commands::gateway::restart_gateway_if_running_for_wechat_config(data_dir).await;
+    // 后台异步重启网关，不阻塞前端 UI 响应
+    let dd = data_dir.to_string();
+    tokio::spawn(async move {
+        let _ = crate::commands::gateway::restart_gateway_if_running_for_wechat_config(&dd).await;
+    });
     Ok(())
 }
 

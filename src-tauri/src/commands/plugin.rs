@@ -214,7 +214,7 @@ fn npm_install_spec_package_base(spec: &str) -> String {
 fn channel_type_to_plugin_id(channel_type: &str) -> Option<&'static str> {
     match channel_type.trim() {
         "feishu" => Some("feishu"),
-        "wxwork" | "wecom" => Some("wxwork"),
+        "wxwork" | "wecom" => Some("wecom"),
         "qq" => Some("qq"),
         "wechat_clawbot" => Some("wechat_clawbot"),
         _ => None,
@@ -471,16 +471,30 @@ fn ensure_one_channel_plugin_blocking(data_dir: &str, plugin_id: &str) -> Result
             }
         }
     } else if !dest.is_dir() {
-        if !bundled_src.is_dir() {
+        let need_npm_fallback = !bundled_src.is_dir()
+            && (plugin_id == "wecom" || plugin_id == "wxwork");
+        if need_npm_fallback {
+            // 企业微信插件：extensions/wecom-connector 不在内置 openclaw-cn 中，直接从 npm 下载
+            match npm_pack_unpack_blocking(data_dir, npm_name, &dest) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err(format!(
+                        "无法从 npm 安装 {}（{}），请先在插件页手动安装「{}」",
+                        npm_name, e, plugin_id
+                    ));
+                }
+            }
+        } else if !bundled_src.is_dir() {
             return Err(format!(
                 "本地无 openclaw-cn/extensions/{}，请先在插件页安装「{}」",
                 ext_folder, plugin_id
             ));
+        } else {
+            if let Err(e) = build_ts_extensions_blocking(data_dir, bundled_src.to_str().unwrap_or("")) {
+                tracing::warn!("extensions/{} 预编译失败（继续复制）: {}", ext_folder, e);
+            }
+            copy_dir_all(&bundled_src, &dest)?;
         }
-        if let Err(e) = build_ts_extensions_blocking(data_dir, bundled_src.to_str().unwrap_or("")) {
-            tracing::warn!("extensions/{} 预编译失败（继续复制）: {}", ext_folder, e);
-        }
-        copy_dir_all(&bundled_src, &dest)?;
     }
 
     install_plugin_deps_blocking(data_dir, dest.to_str().unwrap_or(""), plugin_id, false)?;
@@ -558,46 +572,6 @@ pub async fn sync_plugins_load_paths(data_dir: &str) -> Result<(), String> {
 #[cfg_attr(windows, allow(unused))]
 fn get_plugins_dir(data_dir: &str) -> String {
     format!("{}/plugins", data_dir)
-}
-
-fn find_pnpm_cmd() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        let mut cmd = Command::new("where.exe");
-        if let Ok(out) = cmd.arg("pnpm.cmd").output() {
-            if out.status.success() {
-                let line = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .next()
-                    .map(|s| s.trim().to_string())?;
-                let p = PathBuf::from(line);
-                if p.is_file() {
-                    return Some(p);
-                }
-            }
-        }
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let p = PathBuf::from(appdata).join("npm").join("pnpm.cmd");
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-        None
-    }
-    #[cfg(not(windows))]
-    {
-        Command::new("which")
-            .arg("pnpm")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .next()
-                    .map(|l| PathBuf::from(l.trim()))
-            })
-    }
 }
 
 /// 检查插件目录是否已完整安装 npm 依赖（可跳过 install）。
@@ -829,65 +803,6 @@ fn install_plugin_deps_blocking(
         // 与旧代码区别：不再强制追加 @latest，避免破坏已有精确版本约束。
         // 镜像未同步旧版导致的 ETARGET 由 registry 回退机制处理（见 npm_registry_candidates）。
         let add_spec = npm_spec.clone();
-        let had_pnpm = find_pnpm_cmd().is_some();
-
-        if let Some(pnpm) = find_pnpm_cmd() {
-            let mut c = Command::new(&pnpm);
-            c.current_dir(plugin_dir)
-                .args(&["add", &add_spec])
-                .env("PATH", &deps_env_path);
-            apply_registry(&mut c, &registry_primary);
-            let o = c
-                .output()
-                .map_err(|e| format!("启动 pnpm 失败: {}", e))?;
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                let stderr_lower = stderr.to_lowercase();
-                if stderr_lower.contains("notarget") || stderr.contains("ETARGET") {
-                    let mut c2 = Command::new(&pnpm);
-                    c2.current_dir(plugin_dir)
-                        .args(&["add", &add_spec])
-                        .env("PATH", &deps_env_path);
-                    apply_registry(&mut c2, "https://registry.npmjs.org");
-                    let o2 = c2
-                        .output()
-                        .map_err(|e| format!("启动 pnpm 失败: {}", e))?;
-                    if !o2.status.success() {
-                        return Err(format!(
-                            "{}\n（已在 npmjs.org 重试仍失败）\n{}",
-                            stderr,
-                            String::from_utf8_lossy(&o2.stderr)
-                        ));
-                    }
-                } else if stderr_lower.contains("err_invalid_url") {
-                    return Err(format!(
-                        "pnpm ERR_INVALID_URL（registry 地址无效）\n当前 registry: {}\n请检查 config/app.yaml 中的 registry: 是否为合法 https:// URL\npnpm 原始错误:\n{}",
-                        registry_primary, stderr
-                    ));
-                } else {
-                    return Err(format!(
-                        "pnpm add {} 失败（registry: {}）\n{}\n如遇网络问题，可尝试更换 config/app.yaml 中的 registry: 为 https://registry.npmmirror.com",
-                        add_spec, registry_primary, stderr
-                    ));
-                }
-            }
-            restore_stub_manifest(&stub_manifest_backup, plugin_id);
-            if let Err(e) =
-                patch_official_npm_channel_plugin_after_install(&plugin_dir_path, npm_spec)
-            {
-                tracing::warn!("切换官方 npm 插件入口失败（非致命）: {}", e);
-            }
-            if channel_plugin_runtime_ready(&plugin_dir_path, plugin_id) {
-                return Ok(());
-            }
-            tracing::warn!(
-                "插件 {} 定向 pnpm add 后仍未满足运行时依赖检测（{}），将执行完整 pnpm/npm install 补全",
-                plugin_id,
-                plugin_dir_path.display()
-            );
-        }
-
-        if !had_pnpm {
         let install_args: Vec<String> = vec![
             "install".to_string(),
             add_spec.clone(),
@@ -998,71 +913,19 @@ fn install_plugin_deps_blocking(
             return Ok(());
         }
         tracing::warn!(
-            "插件 {} 定向 npm install {} 后仍未满足运行时依赖检测（{}），将执行完整 pnpm/npm install 补全",
+            "插件 {} 定向 npm install {} 后仍未满足运行时依赖检测（{}），将执行完整 npm install 补全",
             plugin_id,
             add_spec,
             plugin_dir_path.display()
         );
-        }
     }
 
     // 默认：通用 npm install（安装 package.json 中的 dependencies + optionalDependencies）
     tracing::info!(
-        "插件 {} 执行完整 npm/pnpm install（npm_spec_opt={:?}）",
+        "插件 {} 执行完整 npm install（npm_spec_opt={:?}）",
         plugin_id,
         npm_spec_opt.as_ref().map(|s| s.as_str())
     );
-    if let Some(pnpm) = find_pnpm_cmd() {
-        let mut c = Command::new(&pnpm);
-        c.current_dir(plugin_dir)
-            .arg("install")
-            .env("PATH", &deps_env_path);
-        apply_registry(&mut c, &registry_primary);
-        let o = c
-            .output()
-            .map_err(|e| format!("启动 pnpm 失败: {}", e))?;
-        if !o.status.success() {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            let stderr_lower = stderr.to_lowercase();
-            if stderr_lower.contains("notarget") || stderr.contains("ETARGET") {
-                let o2 = Command::new(&pnpm)
-                    .current_dir(plugin_dir)
-                    .arg("install")
-                    .env("PATH", &deps_env_path)
-                    .env("npm_config_registry", "https://registry.npmjs.org")
-                    .env("NPM_CONFIG_REGISTRY", "https://registry.npmjs.org")
-                    .output()
-                    .map_err(|e| format!("启动 pnpm 失败: {}", e))?;
-                if !o2.status.success() {
-                    return Err(format!(
-                        "{}\n（已在 npmjs.org 重试仍失败）\n{}",
-                        stderr,
-                        String::from_utf8_lossy(&o2.stderr)
-                    ));
-                }
-            } else if stderr_lower.contains("err_invalid_url") {
-                return Err(format!(
-                    "pnpm ERR_INVALID_URL（registry 地址无效）\n当前 registry: {}\n请检查 config/app.yaml 中的 registry: 是否为合法 https:// URL\n\
-                    pnpm 原始错误:\n{}",
-                    registry_primary, stderr
-                ));
-            } else {
-                return Err(format!(
-                    "pnpm install 失败（registry: {}）\n{}\n\
-                    如遇网络问题，可尝试更换 config/app.yaml 中的 registry: 为 https://registry.npmmirror.com",
-                    registry_primary, stderr
-                ));
-            }
-        }
-        if channel_plugin_runtime_ready(&plugin_dir_path, plugin_id) {
-            return Ok(());
-        }
-        tracing::warn!(
-            "插件 {} 完整 pnpm install 后仍未满足运行时依赖检测（{}），将回退执行 npm install",
-            plugin_id,
-            plugin_dir_path.display()
-        );
-    }
 
     let (node_exe, _) = resolve_node(data_base);
     let npm_cli = node_exe.parent().and_then(|p| {
@@ -1187,7 +1050,7 @@ fn plugin_extension_and_npm_name(plugin_id: &str) -> Option<(&'static str, &'sta
             "wecom-connector",
             "@wecom/wecom-openclaw-plugin",
         )),
-        "wechat_clawbot" => Some(("openclaw-weixin", "@tencent-weixin/openclaw-weixin")),
+        "wechat_clawbot" => Some(("openclaw-weixin", "@tencent-weixin/openclaw-weixin@1.0.3")),
         "qq" => Some(("qqbot", "@sliverp/qqbot")),
         _ => None,
     }
@@ -2156,7 +2019,7 @@ pub async fn install_plugin(
         "install-progress",
         InstallProgressEvent::started(
             &stage,
-            &format!("正在安装插件 {} 的依赖（npm/pnpm install）…", plugin_id),
+            &format!("正在安装插件 {} 的依赖（npm install）…", plugin_id),
         ),
     );
     let _ = app.emit(

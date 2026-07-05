@@ -167,11 +167,6 @@ export default function CodexChatArea({
     const t = store.threads.find(x => x.id === tid);
     if (t) store.updateThread(tid, { messages: t.messages.map(m => m.id === msgId ? { ...m, ...updates } : m) });
   };
-  const storeReplaceMessages = (tid: string, msgs: ChatMessage[]) => {
-    const store = useThreadStore.getState();
-    const t = store.threads.find(x => x.id === tid);
-    if (t) store.updateThread(tid, { messages: msgs });
-  };
 
   useEffect(() => { scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight); }, [messages]);
 
@@ -180,38 +175,42 @@ export default function CodexChatArea({
     try { await invoke('set_default_model', { provider: opt.provider, modelName: opt.model }); } catch {}
   };
 
-  const doChat = async (tid: string, aId: string, userMsg: string) => {
+  const doChat = async (tid: string, aId: string, userMsg: string, mediaBlocks?: any[]) => {
     const port = gatewayPort || 18789;
-    const model = currentModel || 'kuaifan/MiniMax-M2.7';
-
+    const model = currentModel || '';
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      console.log('[chat] invoking proxy_gateway_chat port=' + port + ' model=' + model);
-      const respText: string = await invoke('proxy_gateway_chat', {
-        port,
-        model,
-        messages: [{ role: 'user', content: userMsg }],
-        stream: false,
-      });
-      console.log('[chat] proxy_gateway_chat returned ' + (respText?.length || 0) + ' bytes');
-
-      const data = JSON.parse(respText);
-      const content = data?.choices?.[0]?.message?.content
-        || data?.choices?.[0]?.delta?.content
-        || '(空)';
-
-      let finalContent = typeof content === 'string' ? content : '';
-
+      const raw = await Promise.race([
+        invoke<string>('proxy_gateway_chat', {
+          port, model,
+          messages: [{ role: 'user', content: userMsg }],
+          stream: false,
+          attachments: (mediaBlocks && mediaBlocks.length > 0) ? mediaBlocks.map((m: any) => ({
+            type: m.media_type,
+            mimeType: m.mime,
+            fileName: m.name || '',
+            content: m.data || '',
+          })) : undefined,
+        }),
+        new Promise<never>((_, reject) => {
+          controller.signal.addEventListener('abort', () => reject(new Error('已取消')));
+        }),
+      ]);
+      if (controller.signal.aborted) return;
+      const data = JSON.parse(raw);
+      const content = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.delta?.content || '(空)';
       if (mountedRef.current) {
-        storeUpdateMessage(tid, aId, { content: finalContent, status: 'done' });
-        const store = useThreadStore.getState();
-        const t = store.threads.find(x => x.id === tid);
-        if (t) store.updateThread(tid, { lastMessage: finalContent.slice(0, 80), ts: Date.now() });
+        storeUpdateMessage(tid, aId, { content, status: 'done' });
+        const t = useThreadStore.getState().threads.find(x => x.id === tid);
+        if (t) useThreadStore.getState().updateThread(tid, { lastMessage: content.slice(0, 80), ts: Date.now() });
       }
     } catch (e: any) {
-      console.error('[chat] proxy_gateway_chat error:', e);
-      if (mountedRef.current) storeUpdateMessage(tid, aId, { content: `出错：${e?.message || e}`, status: 'error' });
+      const msg = e?.message === '已取消' ? '已中止' : `出错：${e?.message || e}`;
+      if (mountedRef.current) storeUpdateMessage(tid, aId, { content: msg, status: e?.message === '已取消' ? 'done' : 'error' });
     } finally {
       if (mountedRef.current) setBusy(false);
+      abortRef.current = null;
     }
   };
 
@@ -284,10 +283,9 @@ export default function CodexChatArea({
     }
 
     setBusy(true);
-    doChat(tid, aId, fullMessage);
+    doChat(tid, aId, fullMessage, mediaBlocks.length > 0 ? mediaBlocks : undefined);
   };
 
-  // Abort
   const handleAbort = () => {
     if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     setBusy(false);
@@ -401,29 +399,7 @@ export default function CodexChatArea({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1.5">
-          {onToggleGateway && (
-            <button
-              onClick={onToggleGateway}
-              disabled={gatewayBusy}
-              className="flex items-center gap-1.5 px-2.5 h-7 rounded-md text-[12px] font-medium transition-all duration-150 disabled:opacity-50"
-              style={{
-                background: gatewayRunning ? 'rgba(74,158,92,0.10)' : 'rgba(200,85,74,0.08)',
-                color: gatewayRunning ? 'var(--cx-success)' : 'var(--cx-error)',
-                border: `1px solid ${gatewayRunning ? 'rgba(74,158,92,0.22)' : 'rgba(200,85,74,0.18)'}`,
-              }}
-            >
-              {gatewayBusy ? (
-                <CxIconLoader className="w-3 h-3 animate-spin" />
-              ) : gatewayRunning ? (
-                <CxIconPlay className="w-3 h-3" style={{ fill: 'currentColor' }} />
-              ) : (
-                <CxIconPower className="w-3 h-3" />
-              )}
-              <span>{gatewayRunning ? '运行中' : '已停止'}</span>
-            </button>
-          )}
-        </div>
+        {/* right side: empty — gateway control moved to top bar */}
       </div>
 
       {/* Messages */}
@@ -540,32 +516,8 @@ export default function CodexChatArea({
               className="text-[12.5px] mb-5 max-w-[360px] leading-relaxed"
               style={{ color: 'var(--cx-text-mute)' }}
             >
-              启动 OpenClaw 网关后即可与 AI 模型对话，支持多平台接入与插件管理。
+              请点击顶部栏「启动」按钮开启网关，即可与 AI 对话。
             </div>
-            {onToggleGateway && (
-              <button
-                onClick={onToggleGateway}
-                disabled={gatewayBusy}
-                className="inline-flex items-center gap-2 px-5 h-9 rounded-lg text-[13px] font-medium transition-all duration-150"
-                style={{
-                  background: gatewayBusy
-                    ? 'var(--cx-bg-hover)'
-                    : 'linear-gradient(180deg, var(--cx-accent) 0%, var(--cx-accent-hover) 100%)',
-                  color: gatewayBusy ? 'var(--cx-text-mute)' : '#fff',
-                  boxShadow: gatewayBusy ? 'none' : '0 1px 2px rgba(91,127,189,0.25), inset 0 1px 0 rgba(255,255,255,0.18)',
-                }}
-              >
-                {gatewayBusy ? (
-                  <>
-                    <CxIconLoader className="w-4 h-4 animate-spin" /> 启动中…
-                  </>
-                ) : (
-                  <>
-                    <CxIconPlay className="w-4 h-4" style={{ fill: 'currentColor' }} /> 一键启动网关
-                  </>
-                )}
-              </button>
-            )}
           </div>
         )}
       </div>

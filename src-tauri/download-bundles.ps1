@@ -314,9 +314,9 @@ if (-not $hasNpm) {
     Skip "npm 不可用，跳过通道插件下载（离线安装将不可用）"
 } else {
     $channelPlugins = @(
-        @{ Id="wxwork";         Pkg="@wecom/wecom-openclaw-plugin";      MinKB=10  },
+        @{ Id="wecom";          Pkg="@wecom/wecom-openclaw-plugin";      MinKB=10  },
         @{ Id="qq";             Pkg="@sliverp/qqbot";                    MinKB=10  },
-        @{ Id="wechat_clawbot"; Pkg="@tencent-weixin/openclaw-weixin";  MinKB=100 },
+        @{ Id="wechat_clawbot"; Pkg="@tencent-weixin/openclaw-weixin@1.0.3";  MinKB=10 },
         @{ Id="telegram";       Pkg="@clawdbot/telegram";                MinKB=10  }
     )
 

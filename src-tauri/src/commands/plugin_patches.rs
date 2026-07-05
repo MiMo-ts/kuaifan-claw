@@ -27,7 +27,53 @@ pub fn apply_plugin_patches(data_dir: &str, resources_dir: Option<&Path>) -> Vec
     ensure_wechat_account_index(&plugins_root.parent().unwrap_or(&plugins_root), &mut out);
     ensure_wechat_bearer_token(&plugins_root.parent().unwrap_or(&plugins_root), &mut out);
     apply_thinking_filter_patch(&PathBuf::from(data_dir).join("openclaw-cn").join("dist"), &mut out);
+    apply_plugin_sdk_alias_patch(&PathBuf::from(data_dir).join("openclaw-cn").join("dist"), &mut out);
+    ensure_plugin_deps(&plugins_root, &mut out);
     out
+}
+
+/// Run npm install in plugin directories that have a package.json but no
+/// node_modules (e.g. freshly extracted tgz without dependencies).
+fn ensure_plugin_deps(plugins_root: &Path, out: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(plugins_root) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let pkg_json = path.join("package.json");
+        let node_modules = path.join("node_modules");
+        if pkg_json.is_file() && !node_modules.is_dir() {
+            out.push(format!("[deps] npm install in {}", path.display()));
+            match std::process::Command::new("npm")
+                .arg("install")
+                .arg("--production")
+                .arg("--no-audit")
+                .arg("--no-fund")
+                .arg("--legacy-peer-deps")
+                .current_dir(&path)
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    out.push(format!("[deps] ok {}", path.display()));
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    out.push(format!(
+                        "[deps] failed {}: {}",
+                        path.display(),
+                        stderr.lines().last().unwrap_or("unknown")
+                    ));
+                }
+                Err(e) => {
+                    out.push(format!("[deps] spawn failed {}: {}", path.display(), e));
+                }
+            }
+        }
+    }
 }
 
 /// Repair the openclaw-weixin plugin account index so the gateway can start
@@ -279,6 +325,64 @@ fn apply_thinking_filter_patch(openclaw_dist: &Path, out: &mut Vec<String>) {
     }
 }
 
+/// KUAIFANCLAW-PATCH: fix plugin SDK alias resolution in loader.js.
+///
+/// resolvePluginSdkAlias() in dist/plugins/loader.js returns the FILE path to
+/// dist/plugin-sdk/index.js. jiti then resolves imports like
+/// openclaw/plugin-sdk/channel-config-schema by appending the subpath to the
+/// aliased FILE path, producing a broken path:
+///   .../plugin-sdk/index.js/channel-config-schema
+///
+/// The fix changes the two candidate paths to point to the plugin-sdk directory
+/// instead, so jiti can resolve subpath imports correctly:
+///   .../plugin-sdk/channel-config-schema  ->  channel-config-schema.js
+///
+/// Idempotent: skips files that already contain the PATCHED-BY marker.
+fn apply_plugin_sdk_alias_patch(openclaw_dist: &Path, out: &mut Vec<String>) {
+    let target = openclaw_dist.join("plugins").join("loader.js");
+    if !target.is_file() {
+        return;
+    }
+    let raw = match fs::read_to_string(&target) {
+        Ok(t) => t,
+        Err(err) => {
+            out.push(format!(
+                "[plugin-sdk-alias] read failed {}: {}",
+                target.display(), err
+            ));
+            return;
+        }
+    };
+    let marker =
+        "// PATCHED-BY-KUAIFANCLAW: plugin-sdk alias dir instead of index file";
+    if raw.contains(marker) {
+        out.push(format!("[plugin-sdk-alias] skip (already patched) {}", target.display()));
+        return;
+    }
+    // 匹配时忽略前导空格（不同 openclaw-cn 版本缩进可能不同）
+    let old_candidates = concat!(
+        "srcCandidate = path.join(cursor, \"src\", \"plugin-sdk\", \"index.ts\");\n",
+        "distCandidate = path.join(cursor, \"dist\", \"plugin-sdk\", \"index.js\");",
+    );
+    let new_candidates = concat!(
+        "srcCandidate = path.join(cursor, \"src\", \"plugin-sdk\");\n",
+        "distCandidate = path.join(cursor, \"dist\", \"plugin-sdk\");\n",
+        "// PATCHED-BY-KUAIFANCLAW: plugin-sdk alias dir instead of index file",
+    );
+    if !raw.contains(old_candidates) {
+        out.push(format!("[plugin-sdk-alias] anchor not found in {}", target.display()));
+        return;
+    }
+    let new_txt = raw.replace(old_candidates, new_candidates);
+    match fs::write(&target, new_txt.as_bytes()) {
+        Ok(()) => out.push(format!("[plugin-sdk-alias] patched {}", target.display())),
+        Err(err) => out.push(format!(
+            "[plugin-sdk-alias] write failed {}: {}", target.display(), err
+        )),
+    }
+}
+
+
 fn apply_dingtalk_patches(root: &Path, out: &mut Vec<String>) {
     for sub in &["dingtalk", "dingtalk-connector"] {
         let dist = root.join(sub).join("dist");
@@ -517,32 +621,38 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 }
 
 fn patch_wechat_compat_js(dist: &Path, out: &mut Vec<String>) {
-    let path = dist.join("src").join("compat.js");
-    if !path.is_file() {
-        return;
-    }
-    let marker = "PATCHED-BY-KUAIFANCLAW: host version check disabled";
-    if let Ok(txt) = fs::read_to_string(&path) {
-        if txt.contains(marker) {
-            out.push(format!("  [skip] {} already patched", path.display()));
-            return;
-        }
-    }
-    // Replace assertHostCompatibility(hostVersion) signature to take an unused arg
-    // and emit only a debug log. The original throws on older hosts; we want
-    // it to be a no-op so the plugin loads.
-    let mut new_body = String::from(
-        "// PATCHED-BY-KUAIFANCLAW: host version check disabled (kuaifanclaw build may report older openclaw-cn versions)
-"
+    let noop_body = concat!(
+        "// PATCHED-BY-KUAIFANCLAW: host version check disabled (kuaifanclaw build may report older openclaw-cn versions)\n",
+        "export function assertHostCompatibility(_hostVersion) { /* no-op */ }\n",
+        "export function isHostVersionSupported(_hostVersion) { return true; }\n",
     );
-    new_body.push_str("export function assertHostCompatibility(_hostVersion) { /* no-op */ }
-");
-    new_body.push_str("export function isHostVersionSupported(_hostVersion) { return true; }
-");
-    if fs::write(&path, new_body).is_ok() {
-        out.push(format!("  [ok] {} replaced with no-op", path.display()));
-    } else {
-        out.push(format!("  [err] failed to write {}", path.display()));
+
+    // Search both dist/src/ (compiled) and {plugin_root}/src/ (jiti loads .ts directly).
+    let plugin_root = dist.parent().map(|p| p.to_path_buf());
+    let mut dirs: Vec<PathBuf> = vec![dist.to_path_buf()];
+    if let Some(ref root) = plugin_root {
+        dirs.push(root.clone());
+    }
+
+    for dir in &dirs {
+        for filename in &["compat.js", "compat.ts"] {
+            let path = dir.join("src").join(filename);
+            if !path.is_file() {
+                continue;
+            }
+            let marker = "PATCHED-BY-KUAIFANCLAW: host version check disabled";
+            if let Ok(txt) = fs::read_to_string(&path) {
+                if txt.contains(marker) {
+                    out.push(format!("  [skip] {} already patched", path.display()));
+                    continue;
+                }
+            }
+            if fs::write(&path, noop_body).is_ok() {
+                out.push(format!("  [ok] {} replaced with no-op", path.display()));
+            } else {
+                out.push(format!("  [err] failed to write {}", path.display()));
+            }
+        }
     }
 }
 

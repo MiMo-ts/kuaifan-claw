@@ -4,6 +4,9 @@ import toast from 'react-hot-toast';
 import {
   CxIconDownload,
   CxIconLoader,
+  CxIconMonitor,
+  CxIconPlay,
+  CxIconPower,
 } from "../components/icons";
 import { useAppStore } from "../stores/appStore";
 import { checkForUpdate, downloadAndInstallUpdate, UpdateProgress } from "../utils/updater";
@@ -72,7 +75,7 @@ export default function HomePage() {
     }
   };
 
-  // Poll gateway status (skip during gateway operation to avoid overriding state)
+  // Poll gateway status
   const pollGateway = useCallback(async () => {
     if (gatewayBusy || gatewayOpLockRef.current) return;
     try {
@@ -128,16 +131,22 @@ export default function HomePage() {
       if (isRunning) {
         await invoke("stop_gateway");
         setGatewayRunning(false);
+        setGatewayStatus({ running: false, port: 0, uptime_seconds: 0, memory_mb: 0 });
         toast.success("网关已停止", { id: toastId });
       } else {
         await invoke("start_gateway");
-        setGatewayRunning(true);
-        toast.success("网关已启动", { id: toastId });
         const status = await invoke<GatewayStatus>("get_gateway_status");
+        setGatewayRunning(status.running);
         setGatewayStatus(status);
+        toast.success(status.running ? "网关已启动" : "网关启动失败", { id: toastId });
       }
     } catch (e) {
-      setGatewayRunning(isRunning); // 恢复原状态
+      setGatewayRunning(isRunning);
+      try {
+        const status = await invoke<GatewayStatus>("get_gateway_status");
+        setGatewayStatus(status);
+        setGatewayRunning(status.running);
+      } catch { /* 查询失败则保持当前显示 */ }
       toast.error(`操作失败: ${e instanceof Error ? e.message : String(e)}`, { id: toastId });
     } finally {
       setGatewayBusy(false);
@@ -180,6 +189,38 @@ export default function HomePage() {
             </button>
           )}
         </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => invoke('open_openclaw_console').catch(() => {})}
+            className="flex items-center gap-1 px-2 h-7 rounded text-[11px] font-medium transition-all duration-150"
+            style={{
+              color: 'var(--cx-text-mute)',
+              border: '1px solid var(--cx-border-soft)',
+            }}
+            title="在浏览器中打开网关控制台"
+          >
+            <CxIconMonitor className="w-3 h-3" /> 控制台
+          </button>
+          <button
+            onClick={handleToggleGateway}
+            disabled={gatewayBusy}
+            className="flex items-center gap-1.5 px-2.5 h-7 rounded-md text-[12px] font-medium transition-all duration-150 disabled:opacity-50"
+            style={{
+              background: isOnline ? 'rgba(200,85,74,0.08)' : 'rgba(74,158,92,0.10)',
+              color: isOnline ? 'var(--cx-error)' : 'var(--cx-success)',
+              border: `1px solid ${isOnline ? 'rgba(200,85,74,0.18)' : 'rgba(74,158,92,0.22)'}`,
+            }}
+          >
+            {gatewayBusy ? (
+              <CxIconLoader className="w-3 h-3 animate-spin" />
+            ) : isOnline ? (
+              <CxIconPower className="w-3 h-3" />
+            ) : (
+              <CxIconPlay className="w-3 h-3" style={{ fill: 'currentColor' }} />
+            )}
+            <span>{gatewayBusy ? (isOnline ? '停止中…' : '启动中…') : (isOnline ? '停止' : '启动')}</span>
+          </button>
+        </div>
       </div>
 
       {/* Update progress */}
@@ -192,7 +233,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Main content */}
+      {/* Main content: chat area (using OpenClaw gateway agent) */}
       <div className="flex-1 min-h-0">
         <CodexChatArea
           title="新对话"

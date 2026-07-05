@@ -7,6 +7,7 @@ import { useAppStore } from "./stores/appStore";
 import InstallProgressBridge from "./components/InstallProgressBridge";
 import CodexShell from "./components/layout/CodexShell";
 
+
 // Lazy-loaded pages
 const WizardPage = lazy(() => import("./pages/WizardPage"));
 const HomePage = lazy(() => import("./pages/HomePage"));
@@ -19,6 +20,7 @@ const PluginPage = lazy(() => import("./pages/PluginPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const BackupPage = lazy(() => import("./pages/BackupPage"));
 const TokenUsagePage = lazy(() => import("./pages/TokenUsagePage"));
+const ConsolePage = lazy(() => import("./pages/ConsolePage"));
 
 function PageLoader() {
   return (
@@ -237,6 +239,19 @@ function AppRoutes() {
               <AppShell>
                 <Suspense fallback={<PageLoader />}>
                   <TokenUsagePage />
+                </Suspense>
+              </AppShell>
+            </RequireAuth>
+          }
+        />
+        {/* Console: embedded Control UI */}
+        <Route
+          path="/console"
+          element={
+            <RequireAuth>
+              <AppShell>
+                <Suspense fallback={<PageLoader />}>
+                  <ConsolePage />
                 </Suspense>
               </AppShell>
             </RequireAuth>

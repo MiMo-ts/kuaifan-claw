@@ -50,6 +50,12 @@ interface AppState {
   // OpenClaw setup
   openclawSetupDone: boolean;
   setOpenclawSetupDone: (v: boolean) => void;
+
+  // Module switching
+  activeModule: "openclaw" | "codex";
+  setActiveModule: (m: "openclaw" | "codex") => void;
+  codexInstalled: boolean;
+  setCodexInstalled: (v: boolean) => void;
 }
 
 const STORE_VERSION = 5;
@@ -134,6 +140,12 @@ export const useAppStore = create<AppState>()(
       // OpenClaw
       openclawSetupDone: false,
       setOpenclawSetupDone: (v) => set({ openclawSetupDone: v }),
+
+      // Module switching
+      activeModule: "openclaw" as "openclaw" | "codex",
+      setActiveModule: (m) => set({ activeModule: m }),
+      codexInstalled: false,
+      setCodexInstalled: (v) => set({ codexInstalled: v }),
     }),
     {
       name: "openclaw-app-storage",
@@ -163,6 +175,8 @@ export const useAppStore = create<AppState>()(
         apiKey: state.apiKey,
         newApiBaseUrl: state.newApiBaseUrl,
         openclawSetupDone: state.openclawSetupDone,
+        activeModule: state.activeModule,
+        codexInstalled: state.codexInstalled,
       }),
     }
   )

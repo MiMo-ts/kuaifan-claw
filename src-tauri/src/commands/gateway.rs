@@ -1641,8 +1641,9 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
         );
     }
 
-    // 浏览器配置：使用内置 clawd 驱动（CDP 模式），无需安装浏览器扩展
+    // 浏览器配置：controlPort=8082, cdpPort=8083（CDP 和控制端口必须不同）
     let browser_control_port = port.saturating_add(2);
+    let browser_cdp_port = browser_control_port.saturating_add(1);
     merge_json_deep(
         &mut patch,
         json!({
@@ -1653,7 +1654,7 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
                 "profiles": {
                     "clawd": {
                         "driver": "clawd",
-                        "cdpUrl": format!("http://127.0.0.1:{browser_control_port}"),
+                        "cdpUrl": format!("http://127.0.0.1:{browser_cdp_port}"),
                         "color": "#5b7fbd"
                     }
                 }
@@ -3280,7 +3281,19 @@ async fn get_gateway_status_internal(data_dir: &str) -> Result<GatewayStatus, St
     })
 }
 
-// ── HTTP proxy: 绕过 CORS，由 Rust 代理请求到网关 ──
+// ── 网关 WebSocket 连接信息 ──
+
+#[tauri::command]
+pub async fn get_gateway_ws_info(
+    data_dir: tauri::State<'_, crate::AppState>,
+) -> Result<serde_json::Value, String> {
+    let data_base = data_dir.inner().get_data_dir();
+    let port = resolve_gateway_http_port(&data_base);
+    let token = resolve_gateway_ws_token(&data_base);
+    Ok(serde_json::json!({ "port": port, "token": token }))
+}
+
+// ── 调用本地 OpenClaw 网关 agent（WS chat.send，经过完整 agent 管线）──
 
 #[tauri::command]
 pub async fn proxy_gateway_chat(
@@ -3288,69 +3301,18 @@ pub async fn proxy_gateway_chat(
     port: u16,
     model: String,
     messages: Vec<serde_json::Value>,
-    stream: Option<bool>,
+    _stream: Option<bool>,
 ) -> Result<String, String> {
     let data_base = data_dir.inner().get_data_dir();
-
-    tracing::info!("proxy_gateway_chat: model={}", model);
-
-    // 读取 models.yaml 获取 kuaifan API Key（明文）
-    let models_yaml_path = std::path::Path::new(&data_base).join("config").join("models.yaml");
-    let api_key = std::fs::read_to_string(&models_yaml_path).ok().and_then(|raw| {
-        let doc: serde_yaml::Value = serde_yaml::from_str(&raw).ok()?;
-        let key = doc.get("providers")?.get("kuaifan")?.get("api_key")?.as_str()?;
-        if key.starts_with("enc:") {
-            crate::services::cipher::get_or_create_cipher_key_sync(&data_base).ok()
-                .and_then(|k| decrypt_credential(key, &k))
-        } else {
-            Some(key.to_string())
-        }
-    }).unwrap_or_default();
-
-    // 去掉 provider 前缀，只传模型名给上游
-    let upstream_model = if let Some(idx) = model.find('/') {
-        model[idx+1..].to_string()
-    } else {
-        model.clone()
-    };
-
-    let use_stream = stream.unwrap_or(false);
-    let body = serde_json::json!({
-        "model": upstream_model,
-        "messages": messages,
-        "stream": use_stream,
-        "max_tokens": 4096,
-    });
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()
-        .map_err(|e| format!("HTTP client: {}", e))?;
-
-    let mut builder = client
-        .post("https://kuaifanio.cn/v1/chat/completions")
-        .json(&body);
-    if !api_key.is_empty() {
-        builder = builder.header("Authorization", format!("Bearer {}", api_key));
-    }
-
-    tracing::info!("proxy_gateway_chat: calling kuaifan API model={}", upstream_model);
-    let resp = builder.send().await.map_err(|e| {
-        tracing::error!("proxy_gateway_chat: request failed: {}", e);
-        format!("请求失败: {}", e)
-    })?;
-    let status = resp.status();
-    let text = resp.text().await.map_err(|e| {
-        tracing::error!("proxy_gateway_chat: read response failed: {}", e);
-        format!("读取响应: {}", e)
-    })?;
-
-    tracing::info!("proxy_gateway_chat: HTTP {} body_len={}", status.as_u16(), text.len());
-    if !status.is_success() {
-        tracing::error!("proxy_gateway_chat: error response: {}", &text[..text.len().min(300)]);
-        return Err(format!("HTTP {}: {}", status.as_u16(), &text[..text.len().min(300)]));
-    }
-    Ok(text)
+    let token = resolve_gateway_ws_token(&data_base);
+    let user_msg = messages.iter()
+        .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+        .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
+        .collect::<Vec<_>>().join("\n");
+    if user_msg.is_empty() { return Err("消息内容为空".to_string()); }
+    let upstream_model = if let Some(idx) = model.find('/') { model[idx+1..].to_string() } else { model.clone() };
+    tracing::info!("proxy_gateway_chat: calling agent WS port={} model={}", port, upstream_model);
+    crate::commands::gateway_ws::call_gateway_chat(port, &token, &user_msg, None, Some(&upstream_model), None).await
 }
 
 // ============================================================

@@ -87,6 +87,57 @@ pub async fn call_gateway_method(
         .ok_or_else(|| "网关响应缺少 payload".to_string())
 }
 
+/// 从 chat event payload 的 message 对象中提取文本
+fn extract_chat_text(payload: &Value) -> Option<&str> {
+    payload.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array())
+        .and_then(|arr| arr.first()).and_then(|item| item.get("text")).and_then(|t| t.as_str())
+}
+
+/// 通过 WebSocket 发送 chat 消息到网关 agent，经过完整 agent 管线
+pub async fn call_gateway_chat(
+    port: u16, token: &str, message: &str, session_key: Option<&str>, model: Option<&str>,
+    attachments: Option<&serde_json::Value>,
+) -> Result<String, String> {
+    let url = format!("ws://127.0.0.1:{}/", port);
+    let mut req = url.into_client_request().map_err(|e| format!("构建 WS 请求失败: {}", e))?;
+    req.headers_mut().insert("Authorization", format!("Bearer {}", token).parse().map_err(|e| format!("Authorization 头无效: {}", e))?);
+    let (mut ws, _) = connect_async(req).await.map_err(|e| format!("连接网关 WS 失败: {}", e))?;
+    let _ = read_until_frame(&mut ws, |v| v.get("type").and_then(|t| t.as_str()) == Some("event")).await?;
+    let connect_body = json!({"type":"req","id":"mgr-connect-1","method":"connect","params":{"minProtocol":3,"maxProtocol":3,"client":{"id":"cli","version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"mode":"cli"},"role":"operator","auth":{"token":token}}});
+    send_text(&mut ws, &connect_body.to_string()).await?;
+    let connect_res = read_response_payload(&mut ws, "mgr-connect-1").await?;
+    if !connect_res.ok { return Err(format!("握手失败: {}", connect_res.error.map(|e| e.to_string()).unwrap_or_default())); }
+    let sk = session_key.map(|s| s.to_string()).unwrap_or_else(|| format!("kuaifan-{}", uuid::Uuid::new_v4()));
+    if let Some(m) = model {
+        let (provider, model_name) = if let Some(idx) = m.find('/') { (&m[..idx], &m[idx+1..]) } else { ("kuaifan", m) };
+        let patch = json!({"type":"req","id":"mgr-patch","method":"sessions.patch","params":{"key":sk,"model":format!("{}/{}",provider,model_name)}});
+        send_text(&mut ws, &patch.to_string()).await?;
+        let _ = read_response_payload(&mut ws, "mgr-patch").await?;
+    }
+    let mut chat_params = json!({"message":message,"sessionKey":sk,"deliver":false,"idempotencyKey":format!("mgr-{}",uuid::Uuid::new_v4())});
+    if let Some(atts) = attachments { if let Some(arr) = atts.as_array() { if !arr.is_empty() { chat_params["attachments"] = atts.clone(); } } }
+    send_text(&mut ws, &json!({"type":"req","id":"mgr-chat","method":"chat.send","params":chat_params}).to_string()).await?;
+    let chat_res = read_response_payload(&mut ws, "mgr-chat").await?;
+    if !chat_res.ok { return Err(format!("chat.send: {}", chat_res.error.map(|e| e.to_string()).unwrap_or_default())); }
+    let mut content = String::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(180);
+    loop {
+        let v = tokio::time::timeout(Duration::from_secs(60), next_json_value(&mut ws)).await.map_err(|_| "等待响应超时".to_string())??;
+        if std::time::Instant::now() > deadline { break; }
+        if v.get("type").and_then(|t| t.as_str()) != Some("event") { continue; }
+        if v.get("event").and_then(|e| e.as_str()) != Some("chat") { continue; }
+        let payload = match v.get("payload") { Some(p) => p, None => continue };
+        match payload.get("state").and_then(|s| s.as_str()).unwrap_or("delta") {
+            "delta" => { if let Some(t) = extract_chat_text(payload) { content.push_str(t); } }
+            "final" => { if let Some(t) = extract_chat_text(payload) { content = t.to_string(); } break; }
+            "error" => { return Err(payload.get("errorMessage").and_then(|m| m.as_str()).unwrap_or("agent 错误").to_string()); }
+            "aborted" => break,
+            _ => {}
+        }
+    }
+    Ok(serde_json::json!({"choices":[{"message":{"role":"assistant","content":content}}],"model":model.unwrap_or("")}).to_string())
+}
+
 struct ParsedRes {
     ok: bool,
     payload: Option<Value>,

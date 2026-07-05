@@ -404,6 +404,7 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
   const [loading, setLoading] = useState(true);
   const [selectedProvider, setSelectedProvider] = useState<string>("kuaifan");
   const [apiKey, setApiKey] = useState("");
+  const [apiFormat, setApiFormat] = useState("chat_completions");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
@@ -447,12 +448,13 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
 
     try {
       const [cfg, defaultModel] = await Promise.all([
-        invoke<{ api_key?: string; proxy_url?: string; proxy_username?: string; proxy_password?: string }>("get_provider_config", { providerId: selectedProvider }),
+        invoke<{ api_key?: string; api_format?: string; proxy_url?: string; proxy_username?: string; proxy_password?: string }>("get_provider_config", { providerId: selectedProvider }),
         invoke<{ provider?: string; model_name?: string }>("get_default_model", {}),
       ]);
       const stored = cfg?.api_key || "";
       setApiKey(stored);
       setHasStoredKey(stored.length > 0);
+      setApiFormat(cfg?.api_format || "chat_completions");
       setProxyUrl(cfg?.proxy_url || "");
       setProxyUsername(cfg?.proxy_username || "");
       setProxyPassword(cfg?.proxy_password || "");
@@ -560,11 +562,28 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
     setTesting(false);
   };
 
+  const handleApiFormatChange = async (fmt: string) => {
+    setApiFormat(fmt);
+    try {
+      await invoke("save_provider_config", {
+        providerId: "kuaifan",
+        apiKey: "",
+        apiFormat: fmt,
+        proxyUrl: null,
+        proxyUsername: null,
+        proxyPassword: null,
+      });
+    } catch (e) {
+      toast.error("保存请求格式失败: " + String(e));
+    }
+  };
+
   const handleSave = async () => {
     try {
       await invoke("save_provider_config", {
         providerId: selectedProvider,
         apiKey,
+        apiFormat: apiFormat || null,
         proxyUrl: proxyUrl || null,
         proxyUsername: proxyUsername || null,
         proxyPassword: proxyPassword || null,
@@ -752,6 +771,71 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
                   </button>
                 )}
               </section>
+
+              {isKuaifan && (
+                <div
+                  className="px-5 py-4 rounded-xl border"
+                  style={{ background: C.bg, borderColor: C.borderSoft }}
+                >
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="text-[13px] font-medium" style={{ color: C.text }}>
+                      请求格式
+                    </span>
+                    <span className="text-[11px]" style={{ color: C.textMute }}>
+                      选择后自动同步到配置文件
+                    </span>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    {[
+                      { value: "chat_completions", label: "Chat Completions", desc: "/v1/chat/completions" },
+                      { value: "responses", label: "Responses", desc: "/v1/responses" },
+                      { value: "messages", label: "Messages", desc: "/v1/messages" },
+                    ].map((opt) => (
+                      <label
+                        key={opt.value}
+                        className="flex items-center gap-2 px-3.5 py-2 rounded-lg border cursor-pointer transition-colors duration-150"
+                        style={{
+                          background: apiFormat === opt.value ? C.accentSoft : C.bg,
+                          borderColor: apiFormat === opt.value ? C.accent : C.borderSoft,
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="apiFormat"
+                          value={opt.value}
+                          checked={apiFormat === opt.value}
+                          onChange={() => handleApiFormatChange(opt.value)}
+                          className="sr-only"
+                        />
+                        <div
+                          className="w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0"
+                          style={{
+                            borderColor: apiFormat === opt.value ? C.accent : C.borderSoft,
+                          }}
+                        >
+                          {apiFormat === opt.value && (
+                            <div
+                              className="w-2 h-2 rounded-full"
+                              style={{ background: C.accent }}
+                            />
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-0.5">
+                          <span
+                            className="text-[12.5px] font-medium"
+                            style={{ color: C.text }}
+                          >
+                            {opt.label}
+                          </span>
+                          <span className="text-[10.5px]" style={{ color: C.textMute }}>
+                            {opt.desc}
+                          </span>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <SectionCard
                 icon={CxIconLayers}

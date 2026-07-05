@@ -97,7 +97,7 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
-  const pollIntervalRef = useRef(5000);
+  const pollIntervalRef = useRef(2000);
   const successDataRef = useRef<QuickBindCompleteData | null>(null);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
@@ -187,11 +187,11 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
         const exp = result.expires_in ?? 600;
         setExpiresIn(exp);
         setRemainingSecs(exp);
-        pollIntervalRef.current = result.interval_ms ?? 5000;
+        pollIntervalRef.current = result.interval_ms ?? 2000;
         setPhase('qr');
         setStatusMsg(cfg.scanningMsg);
         // Auto-start polling — 使用 API 返回的间隔，避免 slow_down
-        scheduleNext(result.interval_ms ?? 5000);
+        scheduleNext(result.interval_ms ?? 2000);
       } else {
         setPhase('error');
         setErrorMsg(result.error || '启动快捷绑定失败，请检查网络后重试');
@@ -250,7 +250,7 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
     stopTimers();
     setQrBase64(null);
     deviceCodeRef.current = null;
-    pollIntervalRef.current = 5000;
+    pollIntervalRef.current = 2000;
     startBind();
   };
 

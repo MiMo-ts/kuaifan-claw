@@ -51,7 +51,8 @@
       "bundled-openclaw/*",
       "resources/data",
       "resources/skills-env",
-      "resources/plugins"
+      "resources/plugins",
+      "resources/patches"
     ],
     "icon": [
       "icons/32x32.png",
