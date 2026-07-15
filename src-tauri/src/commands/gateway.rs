@@ -1,8 +1,9 @@
-﻿// 网关控制命令 — 启动真实的 openclaw-cn `gateway` 子命令，并把管理端配置写入安装目录下的 openclaw.json
+﻿// 网关控制命令 — 启动真实的 openclaw `gateway` 子命令，并把管理端配置写入安装目录下的 openclaw.json
 
 use crate::commands::hidden_cmd;
 use crate::commands::log::OPENCLAW_GATEWAY_LOG;
 use crate::commands::robot::get_robot_system_prompt;
+use crate::bundled_env::OPENCLAW_DATA_DIR_NAME;
 use crate::env_paths::{resolve_node, resolve_git};
 use crate::models::GatewayStatus;
 use crate::services::cipher::{decrypt_credential, CIPHER_PREFIX};
@@ -15,8 +16,27 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
 
-/// 与 OpenClaw-CN 包内默认网关端口一致（app.yaml 未写 port 时的回退）
+/// 与 OpenClaw 包内默认网关端口一致（app.yaml 未写 port 时的回退）
 const FALLBACK_GATEWAY_PORT: u16 = 18789;
+
+#[cfg(test)]
+mod official_package_tests {
+    use super::*;
+
+    #[test]
+    fn uses_the_official_openclaw_data_directory() {
+        assert_eq!(OPENCLAW_DATA_DIR_NAME, "openclaw");
+    }
+
+    #[test]
+    fn browser_config_uses_the_official_managed_profile() {
+        let browser = official_browser_config(18789);
+        assert_eq!(browser["defaultProfile"], "openclaw");
+        assert_eq!(browser["profiles"]["openclaw"]["cdpPort"], 18792);
+        assert!(browser.get("controlUrl").is_none());
+        assert!(browser["profiles"]["openclaw"].get("driver").is_none());
+    }
+}
 
 // ── 集中式通道元数据中心 ────────────────────────────────────────────────────────
 // 描述每个 channel_type（管理端 YAML 里存的）与 OpenClaw 插件之间的映射关系。
@@ -29,7 +49,7 @@ const FALLBACK_GATEWAY_PORT: u16 = 18789;
 //
 // 所有硬编码的通道判断都必须通过这个表驱动；新增插件时只需在这里注册。
 
-/// 与 openclaw-cn dist/routing/session-key.js 中 normalizeAccountId 对齐，生成稳定账号 key
+/// 与 openclaw dist/routing/session-key.js 中 normalizeAccountId 对齐，生成稳定账号 key
 fn normalize_account_id(id: &str) -> String {
     id.trim()
         .to_lowercase()
@@ -135,8 +155,31 @@ fn app_yaml_path(data_dir: &str) -> PathBuf {
 
 fn openclaw_json_path(data_dir: &str) -> PathBuf {
     PathBuf::from(data_dir)
-        .join("openclaw-cn")
+        .join("openclaw")
         .join("openclaw.json")
+}
+
+fn official_browser_config(gateway_port: u16) -> serde_json::Value {
+    json!({
+        "enabled": true,
+        "defaultProfile": "openclaw",
+        "profiles": {
+            "openclaw": {
+                "cdpPort": gateway_port.saturating_add(3),
+                "color": "#5b7fbd"
+            }
+        }
+    })
+}
+
+fn remove_legacy_manager_browser_config(base: &mut serde_json::Value) {
+    let Some(browser) = base.get_mut("browser").and_then(|value| value.as_object_mut()) else {
+        return;
+    };
+    browser.remove("controlUrl");
+    if let Some(profiles) = browser.get_mut("profiles").and_then(|value| value.as_object_mut()) {
+        profiles.remove("clawd");
+    }
 }
 
 fn instances_yaml_path(data_dir: &str) -> PathBuf {
@@ -325,6 +368,8 @@ fn read_channel_patches(data_dir: &str) -> (Option<serde_json::Value>, Vec<Manag
     #[derive(serde::Deserialize)]
     struct InstEntry {
         id: String,
+        #[serde(default = "default_openclaw_module_id")]
+        module_id: String,
         enabled: bool,
         name: String,
         #[serde(default)]
@@ -337,6 +382,10 @@ fn read_channel_patches(data_dir: &str) -> (Option<serde_json::Value>, Vec<Manag
         created_at: Option<String>,
     }
 
+    fn default_openclaw_module_id() -> String {
+        "openclaw".to_string()
+    }
+
     let doc: InstDoc = match serde_yaml::from_str(&content) {
         Ok(d) => d,
         Err(_) => return (None, vec![]),
@@ -344,7 +393,11 @@ fn read_channel_patches(data_dir: &str) -> (Option<serde_json::Value>, Vec<Manag
 
     // 过滤出所有已启用的实例，并按创建时间排序。
     // 排序确保"首个实例"始终是最早创建的，而不是依赖 YAML 数组顺序（避免手动调整 YAML 导致不同实例变成 main）。
-    let mut enabled_instances: Vec<_> = doc.instances.into_iter().filter(|i| i.enabled).collect();
+    let mut enabled_instances: Vec<_> = doc
+        .instances
+        .into_iter()
+        .filter(|instance| instance.enabled && instance.module_id == "openclaw")
+        .collect();
     enabled_instances.sort_by(|a, b| {
         a.created_at
             .as_deref()
@@ -584,9 +637,9 @@ mod manager_agent_workspace_tests {
 
     #[test]
     fn robot_workspace_rejects_path_traversal() {
-        assert!(robot_workspace_path("D:/ORD/data", "x/../y").is_none());
-        assert!(robot_workspace_path("D:/ORD/data", "a/b").is_none());
-        let w = robot_workspace_path("D:/ORD/data", "robot_001").unwrap();
+        assert!(robot_workspace_path("D:/ORD/data", Some("x/../y")).is_none());
+        assert!(robot_workspace_path("D:/ORD/data", Some("a/b")).is_none());
+        let w = robot_workspace_path("D:/ORD/data", Some("robot_001")).unwrap();
         assert!(w.replace('\\', "/").ends_with("robots/robot_001"));
     }
 
@@ -1468,7 +1521,7 @@ fn read_default_model_provider(data_dir: &str) -> Option<String> {
     yaml_default_model_scalar_string(dm.get("provider")?)
 }
 
-/// OpenClaw-CN / pi-ai 使用的常见环境变量名（与 dist/agents/model-auth.js 对齐）
+/// OpenClaw / pi-ai 使用的常见环境变量名（与 dist/agents/model-auth.js 对齐）
 fn provider_api_key_env_var(provider: &str) -> Option<&'static str> {
     match provider.to_lowercase().as_str() {
         "openai" => Some("OPENAI_API_KEY"),
@@ -1593,12 +1646,14 @@ fn prune_stale_manager_channel_account_keys(
     }
 }
 
-/// 将管理端 `app.yaml` / `models.yaml` 写入 `{data_dir}/openclaw-cn/openclaw.json`（深度合并，保留 skills 等已有字段）
+/// 将管理端 `app.yaml` / `models.yaml` 写入 `{data_dir}/openclaw/openclaw.json`（深度合并，保留 skills 等已有字段）
 pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), String> {
-    let openclaw_dir = PathBuf::from(data_dir).join("openclaw-cn");
+    crate::commands::model::ensure_models_yaml_api_keys_are_plaintext(data_dir).await?;
+
+    let openclaw_dir = PathBuf::from(data_dir).join("openclaw");
     tokio::fs::create_dir_all(&openclaw_dir)
         .await
-        .map_err(|e| format!("创建 openclaw-cn 目录失败: {}", e))?;
+        .map_err(|e| format!("创建 openclaw 目录失败: {}", e))?;
 
     let cfg_path = openclaw_json_path(data_dir);
     let mut base: serde_json::Value = if cfg_path.exists() {
@@ -1613,7 +1668,7 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
     let (port, token, host) = read_app_gateway_from_yaml(data_dir);
     let (bind, custom_host) = gateway_bind_from_host(&host);
 
-    // OpenClaw-CN 0.1.9+：未设置 gateway.mode 时 CLI 会直接退出（见 gateway-cli/run.js）
+    // OpenClaw 0.1.9+：未设置 gateway.mode 时 CLI 会直接退出（见 gateway-cli/run.js）
     let mut gateway_patch = json!({
         "mode": "local",
         "port": port,
@@ -1641,25 +1696,11 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
         );
     }
 
-    // 浏览器配置：controlPort=8082, cdpPort=8083（CDP 和控制端口必须不同）
-    let browser_control_port = port.saturating_add(2);
-    let browser_cdp_port = browser_control_port.saturating_add(1);
+    // 官方 OpenClaw 托管浏览器 profile。旧版 Manager 写入的 driver="clawd"
+    // 和 controlUrl 都不属于官方 schema，会导致 gateway 在配置校验阶段直接退出。
     merge_json_deep(
         &mut patch,
-        json!({
-            "browser": {
-                "enabled": true,
-                "defaultProfile": "clawd",
-                "controlUrl": format!("http://127.0.0.1:{browser_control_port}"),
-                "profiles": {
-                    "clawd": {
-                        "driver": "clawd",
-                        "cdpUrl": format!("http://127.0.0.1:{browser_cdp_port}"),
-                        "color": "#5b7fbd"
-                    }
-                }
-            }
-        }),
+        json!({ "browser": official_browser_config(port) }),
     );
 
     // 启用 HTTP /v1/chat/completions 端点（供管理端 Rust 代理调用）
@@ -1677,6 +1718,7 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
     );
 
     merge_json_deep(&mut base, patch);
+    remove_legacy_manager_browser_config(&mut base);
 
     // 从 models.yaml 读取所有供应商 API Key，以明文写入 openclaw.json 的 models.providers.{id}.apiKey
     inject_provider_api_keys_into_openclaw_json(&mut base, data_dir);
@@ -1734,6 +1776,10 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
 
     // 防止多次创建机器人后 extraDirs 堆积，导致网关加载到其它模板机器人的技能
     prune_stale_skills_extra_dirs(&mut base, data_dir);
+
+    // 确保 plugins.load.paths 包含 node_modules 路径（插件安装在此处）
+    let node_modules = PathBuf::from(data_dir).join("openclaw").join("node_modules");
+    ensure_plugins_load_paths(&mut base, &node_modules);
 
     // 从 CHANNEL_META 找出所有需要显式启用插件的通道，检查是否有已启用的实例，
     // 若有则写入 plugins.entries.{key}.enabled = true。
@@ -1821,7 +1867,7 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
     // 设置 plugins.load.paths：扩展目录 + 用户插件目录（统一正斜杠，避免 Windows 混用）
     // 飞书等通道通过 extensions/ 下的 openclaw.plugin.json 注册，必须在此路径列表中才能被发现和启动
     let data_root = data_dir.trim_end_matches(|c| c == '/' || c == '\\').replace('\\', "/");
-    let ext_dir = format!("{}/openclaw-cn/extensions", data_root);
+    let ext_dir = format!("{}/{}/extensions", data_root, OPENCLAW_DATA_DIR_NAME);
     let plugins_dir = format!("{}/plugins", data_root);
     if let Some(pl) = base.get_mut("plugins") {
         if let Some(obj) = pl.as_object_mut() {
@@ -1891,8 +1937,8 @@ pub(crate) fn resolve_gateway_http_port(data_dir: &str) -> u16 {
 }
 
 fn openclaw_state_dir(data_dir: &str) -> PathBuf {
-    // 直接使用 openclaw-cn 作为状态目录，确保插件凭证路径一致
-    PathBuf::from(data_dir).join("openclaw-cn")
+    // 直接使用 openclaw 作为状态目录，确保插件凭证路径一致
+    PathBuf::from(data_dir).join("openclaw")
 }
 
 /// 与 [`crate::commands::model::static_provider_models`] 对齐，供 OpenClaw 控制台 `models.json` 补齐。
@@ -2251,6 +2297,32 @@ fn build_provider_model_json(provider_id: &str, e: &ProviderCatalogEntry) -> ser
 }
 
 /// 将管理端特有（OpenClaw 内置目录暂无）的模型追加到 `openclaw.json`，覆盖所有已知供应商。
+/// 确保 plugins.load.paths 包含 node_modules 的 @ 命名空间目录（绝对路径）
+fn ensure_plugins_load_paths(base: &mut serde_json::Value, node_modules: &std::path::Path) {
+    let mut paths: Vec<String> = base
+        .pointer("/plugins/load/paths")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+
+    for scope in &["@openclaw", "@tencent-weixin", "@wecom"] {
+        let p = node_modules.join(scope);
+        let s = p.to_string_lossy().replace('\\', "/");
+        if p.exists() && !paths.contains(&s) { paths.push(s); }
+    }
+    let root = node_modules.to_string_lossy().replace('\\', "/");
+    if node_modules.exists() && !paths.contains(&root) { paths.push(root); }
+
+    let plugins = base.as_object_mut().and_then(|o| o.entry("plugins".to_string()).or_insert(json!({})).as_object_mut());
+    if let Some(pl) = plugins {
+        let load = pl.entry("load".to_string()).or_insert(json!({})).as_object_mut();
+        if let Some(ld) = load {
+            ld.insert("paths".to_string(), json!(paths));
+        }
+    }
+    info!("Plugins load paths set: {:?}", paths);
+}
+
 /// 从 models.yaml 读取所有供应商的 API Key（解密后明文），写入 openclaw.json 的 models.providers.{id}.apiKey。
 /// 仅当 models.yaml 中存在对应 provider 且 api_key 非空时才覆盖。
 fn inject_provider_api_keys_into_openclaw_json(base: &mut serde_json::Value, data_dir: &str) {
@@ -2295,9 +2367,29 @@ fn inject_provider_api_keys_into_openclaw_json(base: &mut serde_json::Value, dat
             encrypted
         };
 
-        if let Some(provider_obj) = models_root.get_mut(&pid).and_then(|v| v.as_object_mut()) {
-            provider_obj.insert("apiKey".to_string(), json!(plain));
-            info!("Injected plaintext API key for provider: {}", pid);
+        // Ensure provider entry exists; if not, create one with baseUrl and apiKey
+        let provider_obj = models_root
+            .entry(&pid)
+            .or_insert_with(|| {
+                let mut obj = serde_json::Map::new();
+                // For custom providers, set baseUrl from models.yaml if available
+                if let Some(base_url) = provider_val.get("base_url").and_then(|v| v.as_str()) {
+                    if !base_url.is_empty() {
+                        obj.insert("baseUrl".to_string(), json!(base_url));
+                    }
+                }
+                serde_json::Value::Object(obj)
+            });
+        if let Some(obj) = provider_obj.as_object_mut() {
+            obj.insert("apiKey".to_string(), json!(plain));
+            // Also set/update baseUrl if present in models.yaml
+            if let Some(base_url) = provider_val.get("base_url").and_then(|v| v.as_str()) {
+                if !base_url.is_empty() && !obj.contains_key("baseUrl") {
+                    obj.insert("baseUrl".to_string(), json!(base_url));
+                }
+            }
+            info!("Injected provider into openclaw.json: {} (base_url={})", pid,
+                  provider_val.get("base_url").and_then(|v| v.as_str()).unwrap_or("none"));
         }
     }
 }
@@ -2511,7 +2603,7 @@ fn abs_path_str(p: &Path) -> Result<String, String> {
     Ok(s)
 }
 
-/// 与 openclaw-cn `dist/config/port-defaults.js` 一致：网关端口 + 偏移得到桥接 / 浏览器 / Canvas 等默认端口。
+/// 与 openclaw `dist/config/port-defaults.js` 一致：网关端口 + 偏移得到桥接 / 浏览器 / Canvas 等默认端口。
 fn gateway_listen_ports_to_clear(main: u16) -> Vec<u16> {
     let mut v = Vec::new();
     for offset in [0u16, 1, 2, 4] {
@@ -2733,7 +2825,7 @@ pub async fn get_gateway_status(
     }
 
     let version = if running {
-        let openclaw_dir = format!("{}/openclaw-cn", data_dir);
+        let openclaw_dir = format!("{}/{}", data_dir, OPENCLAW_DATA_DIR_NAME);
         let pkg_path = format!("{}/package.json", openclaw_dir);
         tokio::fs::read_to_string(&pkg_path)
             .await
@@ -2780,30 +2872,15 @@ pub async fn get_gateway_status(
 
 /// 供 `start_gateway` 与「仅路径」场景复用（例如新建微信实例后需在无 `State` 时重启网关）。
 pub async fn start_gateway_with_data_dir_path(data_dir: &str) -> Result<String, String> {
-    let openclaw_dir = format!("{}/openclaw-cn", data_dir);
+    let openclaw_dir = format!("{}/{}", data_dir, OPENCLAW_DATA_DIR_NAME);
 
     if !Path::new(&openclaw_dir).exists() {
-        return Err("OpenClaw-CN 未安装，请先完成安装向导".to_string());
+        return Err("OpenClaw 未安装，请先完成安装向导".to_string());
     }
 
-    let entry = Path::new(&openclaw_dir).join("dist").join("entry.js");
+    let entry = Path::new(&openclaw_dir).join("openclaw.mjs");
     if !entry.exists() {
-        return Err("openclaw-cn 安装不完整：缺少 dist/entry.js".to_string());
-    }
-
-    // 确保 entry-hidden.js 存在（隐藏子进程窗口的 wrapper）
-    let hidden_entry = Path::new(&openclaw_dir).join("dist").join("entry-hidden.js");
-    if !hidden_entry.exists() {
-        let hidden_js = r#"import cp from "node:child_process";
-const oSpawn=cp.spawn,oExec=cp.exec,oExecFile=cp.execFile,oFork=cp.fork;
-const w=(o)=>o&&typeof o==="object"&&!("windowsHide"in o)?{...o,windowsHide:true}:o||{windowsHide:true};
-cp.spawn=function(c,a,o){if(typeof a==="function"){o=a;a=[]}if(typeof o==="function")o={};return oSpawn(c,a||[],w(o))};
-cp.exec=function(c,o,b){if(typeof o==="function"){b=o;o={}}return oExec(c,w(o||{}),b)};
-cp.execFile=function(c,a,o,b){if(typeof a==="function"){b=a;a=[];o={}}if(typeof o==="function"){b=o;o={}}return oExecFile(c,a||[],w(o||{}),b)};
-cp.fork=function(m,a,o){return oFork(m,a||[],w(o||{}))};
-await import("./entry.js");
-"#;
-        let _ = tokio::fs::write(&hidden_entry, hidden_js).await;
+        return Err("OpenClaw 安装不完整：缺少 openclaw.mjs".to_string());
     }
 
     sync_openclaw_config_from_manager(data_dir).await?;
@@ -2819,7 +2896,7 @@ await import("./entry.js");
                 "程序正在读取的 models.yaml 为：\n{}\n\n\
                  若你已在别处编辑过配置但仍提示此项，多半是编辑了错误路径（例如安装目录下的 resources\\data，那是只读模板）。\
                  请用「模型配置」页保存一次，或设置环境变量 OPENCLAW_CN_DATA_DIR 指向你的数据目录；\
-                 便携模式可在 exe 同目录放置空文件 OpenClaw-CN.portable，数据将写入 exe 旁 data\\ 目录。\n\n\
+                 便携模式可在 exe 同目录放置空文件 OpenClaw.portable，数据将写入 exe 旁 data\\ 目录。\n\n\
                  若文件编码为 UTF-16，请另存为 UTF-8；查看日志中「解析 models.yaml 失败」可确认是否 YAML 损坏。",
                 path_display
             )
@@ -2835,84 +2912,6 @@ await import("./entry.js");
              保存后 default_model.provider 与 model_name 均不能为空。",
             hint
         ));
-    }
-
-    if let Err(e) =
-        crate::commands::installer::patch_openclaw_gateway_localhost_usage(&openclaw_dir).await
-    {
-        tracing::warn!(
-            "网关用量本机授权补丁未应用（用量页可能提示缺少权限）: {}",
-            e
-        );
-    }
-    if let Err(e) =
-        crate::commands::installer::patch_sessions_usage_aggregate_fix(&openclaw_dir).await
-    {
-        tracing::warn!(
-            "sessions.usage 汇总补丁未应用（用量页可能仍只统计前 N 个会话）: {}",
-            e
-        );
-    }
-    if let Err(e) =
-        crate::commands::installer::patch_sessions_usage_session_display_fallbacks(&openclaw_dir)
-            .await
-    {
-        tracing::warn!(
-            "sessions.usage 会话渠道/模型展示回退未应用（最近会话表可能仍显示 —）: {}",
-            e
-        );
-    }
-    if let Err(e) =
-        crate::commands::installer::patch_session_cost_usage_utc_and_discover(&openclaw_dir).await
-    {
-        tracing::warn!(
-            "session-cost-usage.js UTC + discoverAllSessions 补丁未应用（日趋势可能少 1-2 天）: {}",
-            e
-        );
-    }
-    if let Err(e) = crate::commands::installer::patch_sessions_usage_all_agents(&openclaw_dir).await
-    {
-        tracing::warn!(
-            "sessions.usage 全 agent 发现补丁未应用（28/29 号数据可能仍缺失）: {}",
-            e
-        );
-    }
-    // 修复 npm 包缺失的 dist 文件（如 openclaw-weixin.js 等导致的 ERR_MODULE_NOT_FOUND）
-    if let Err(e) =
-        crate::commands::installer::patch_openclaw_broken_modules(&openclaw_dir).await
-    {
-        tracing::warn!(
-            "openclaw-cn 损坏模块补丁未应用（网关可能因 ERR_MODULE_NOT_FOUND 启动失败）: {}",
-            e
-        );
-    }
-    if let Err(e) =
-        crate::commands::installer::patch_shell_utils_drop_node_powershell(&openclaw_dir).await
-    {
-        tracing::warn!(
-            "Windows shell-utils node-e 补丁未应用（exec 读 .env 等可能仍失败）: {}",
-            e
-        );
-    }
-    if let Err(e) =
-        crate::commands::installer::patch_shell_utils_windows_exec_cmd_quoting(&openclaw_dir).await
-    {
-        tracing::warn!(
-            "Windows exec type 引号补丁未应用（tools 读文件可能失败）: {}",
-            e
-        );
-    }
-    if let Err(e) =
-        crate::commands::installer::patch_bash_tools_exec_windows_command_normalize(&openclaw_dir)
-            .await
-    {
-        tracing::warn!("Windows bash-tools.exec 规范化补丁未应用: {}", e);
-    }
-    if let Err(e) =
-        crate::commands::installer::patch_shell_utils_windows_bat_exec_normalize(&openclaw_dir)
-            .await
-    {
-        tracing::warn!("Windows .bat/cmd exec 规范化补丁未应用: {}", e);
     }
 
     // 清理旧版遗留的 data/plugins/feishu（飞书由网关内置 dist/feishu/ 原生支持，不应存在于此）
@@ -2999,7 +2998,9 @@ pub async fn restart_gateway_if_running_for_wechat_config(data_dir: &str) -> Res
     // 等待旧进程退出 + 端口释放（飞书等插件加载可能需数秒才能完全退出）
     tokio::time::sleep(Duration::from_secs(5)).await;
     // 清除网关锁文件，避免残留锁导致 "gateway already running"
-    let lock_file = PathBuf::from(data_dir).join("openclaw-cn").join(".gateway.lock");
+    let lock_file = PathBuf::from(data_dir)
+        .join(OPENCLAW_DATA_DIR_NAME)
+        .join(".gateway.lock");
     let _ = tokio::fs::remove_file(&lock_file).await;
     start_gateway_with_data_dir_path(data_dir).await?;
     Ok(())
@@ -3013,7 +3014,7 @@ pub async fn start_gateway(data_dir: tauri::State<'_, crate::AppState>) -> Resul
     start_gateway_with_data_dir_path(&data_dir).await
 }
 
-/// 直接运行 `node dist/entry.js gateway`（npm 包通常不含 `scripts/run-node.mjs`，`npm run start` 无法启动网关）
+/// 直接运行官方 OpenClaw CLI 的 `gateway run` 子命令。
 fn spawn_gateway_process(
     openclaw_dir: &str,
     config_abs: &str,
@@ -3063,7 +3064,16 @@ fn spawn_gateway_process(
 
         let mut cmd = hidden_cmd::hidden_command(&node_exe);
         let gw_http_port = resolve_gateway_http_port(data_dir);
-        cmd.args(["dist/entry-hidden.js", "gateway"])
+        let gw_http_port_arg = gw_http_port.to_string();
+        cmd.args([
+            "openclaw.mjs",
+            "gateway",
+            "run",
+            "--bind",
+            "loopback",
+            "--port",
+            gw_http_port_arg.as_str(),
+        ])
             .current_dir(openclaw_dir)
             .env("PATH", &new_path)
             .env("OPENCLAW_CONFIG_PATH", config_abs)
@@ -3097,7 +3107,7 @@ fn spawn_gateway_process(
     {
         let mut c = Command::new("sh");
         c.arg("-c")
-            .arg("node dist/entry.js gateway")
+            .arg(format!("node openclaw.mjs gateway run --bind loopback --port {}", resolve_gateway_http_port(data_dir)))
             .current_dir(openclaw_dir)
             .env("OPENCLAW_CONFIG_PATH", config_abs)
             .env("OPENCLAW_STATE_DIR", state_abs)
@@ -3133,7 +3143,7 @@ pub async fn open_openclaw_console(
     let token = resolve_gateway_ws_token(&data_dir);
     let token_trim = token.trim();
     let base = format!("http://127.0.0.1:{}/control-ui", port);
-    // 与 `openclaw-cn dashboard` 一致：Control UI 需带 `?token=` 才会把令牌写入 localStorage 并完成 WS 握手，
+    // 与 `openclaw dashboard` 一致：Control UI 需带 `?token=` 才会把令牌写入 localStorage 并完成 WS 握手，
     // 否则浏览器直接打开裸 URL 会报 1008 gateway token missing。
     let open_url = if token_trim.len() >= 16 {
         format!("{}?token={}", base, urlencoding::encode(token_trim))
@@ -3149,6 +3159,29 @@ pub async fn open_openclaw_console(
             base
         )
     })
+}
+
+#[tauri::command]
+pub async fn get_openclaw_embedded_gui_url(
+    data_dir: tauri::State<'_, crate::AppState>,
+) -> Result<String, String> {
+    let data_dir = data_dir.inner().get_data_dir();
+    let status = get_gateway_status_internal(&data_dir).await?;
+    if !status.running {
+        return Err("OpenClaw 网关未运行，请先启动网关".to_string());
+    }
+
+    let gateway_port = resolve_gateway_http_port(&data_dir);
+    let proxy_port = crate::commands::control_ui_proxy::start(&data_dir, gateway_port)?;
+    let token = resolve_gateway_ws_token(&data_dir);
+    let token = token.trim();
+    let base = format!("http://127.0.0.1:{}/", proxy_port);
+
+    if token.len() >= 16 {
+        Ok(format!("{}?token={}", base, urlencoding::encode(token)))
+    } else {
+        Ok(base)
+    }
 }
 
 #[tauri::command]

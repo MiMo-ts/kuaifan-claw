@@ -253,7 +253,7 @@ async fn write_instances_document(
 /// 读取 openclaw.json，从 skills.load.extraDirs 中移除所有包含指定机器人目录的条目
 async fn cleanup_openclaw_extra_dirs(data_dir: &str, robot_id: &str) {
     let openclaw_json_path = PathBuf::from(data_dir)
-        .join("openclaw-cn")
+        .join(crate::bundled_env::OPENCLAW_DATA_DIR_NAME)
         .join("openclaw.json");
 
     let content = match tokio::fs::read_to_string(&openclaw_json_path).await {
@@ -314,24 +314,39 @@ async fn cleanup_openclaw_extra_dirs(data_dir: &str, robot_id: &str) {
 #[tauri::command]
 pub async fn list_instances(
     data_dir: tauri::State<'_, crate::AppState>,
+    module_id: Option<String>,
 ) -> Result<Vec<Instance>, String> {
     let data_dir = data_dir.inner().get_data_dir();
     let config_path = format!("{}/config/instances.yaml", data_dir);
     let doc = read_instances_document(&config_path).await;
-    Ok(doc.instances)
+    Ok(match module_id {
+        Some(module_id) => doc
+            .instances
+            .into_iter()
+            .filter(|instance| instance.module_id == module_id)
+            .collect(),
+        None => doc.instances,
+    })
 }
 
 #[tauri::command]
 pub async fn get_instance(
     data_dir: tauri::State<'_, crate::AppState>,
     instance_id: String,
+    module_id: Option<String>,
 ) -> Result<Instance, String> {
     let data_dir = data_dir.inner().get_data_dir();
     let config_path = format!("{}/config/instances.yaml", data_dir);
     let doc = read_instances_document(&config_path).await;
     doc.instances
         .into_iter()
-        .find(|i| i.id == instance_id)
+        .find(|instance| {
+            instance.id == instance_id
+                && module_id
+                    .as_ref()
+                    .map(|module_id| instance.module_id == *module_id)
+                    .unwrap_or(true)
+        })
         .ok_or_else(|| format!("未找到实例: {}", instance_id))
 }
 
@@ -345,10 +360,15 @@ pub async fn create_instance(
     model_config: Option<ModelConfig>,
     max_history: usize,
     response_mode: String,
+    module_id: Option<String>,
 ) -> Result<Instance, String> {
     info!("创建实例: {}", name);
 
     let data_dir = data_dir.inner().get_data_dir();
+    let module_id = module_id.unwrap_or_else(|| "openclaw".to_string());
+    if !matches!(module_id.as_str(), "openclaw" | "hermes") {
+        return Err(format!("模块 '{}' 暂不支持创建实例", module_id));
+    }
     let config_path = format!("{}/config/instances.yaml", data_dir);
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -371,6 +391,7 @@ pub async fn create_instance(
 
     let instance = Instance {
         id: instance_id,
+        module_id: module_id.clone(),
         name,
         enabled: true,
         robot_id,
@@ -388,10 +409,15 @@ pub async fn create_instance(
     doc.instances.push(instance.clone());
     write_instances_document(&config_path, &doc).await?;
 
-    // 同步飞书凭证 + 路由到 openclaw.json（失败仅警告，不阻断保存）
-    if let Err(e) = crate::commands::gateway::sync_openclaw_config_from_manager(&data_dir).await {
-        warn!("保存实例后同步网关配置失败: {}", e);
-    } else if matches!(
+    // 统一配置保存后，仅投影到所属模块的运行时配置。
+    if let Err(e) = crate::commands::module::sync_module_configuration(&module_id, &data_dir).await {
+        warn!("保存实例后同步模块配置失败: {}", e);
+    }
+    // Hermes: 同步平台凭证到 .env
+    if module_id == "hermes" {
+        crate::commands::module::sync_hermes_platform_credentials(&data_dir).await;
+    }
+    if module_id == "openclaw" && matches!(
         instance.channel_type.as_str(),
         "wechat_clawbot" | "qq" | "wxwork"
     ) {
@@ -471,10 +497,9 @@ pub async fn update_instance(
     let updated = inst.clone();
     write_instances_document(&config_path, &doc).await?;
 
-    // 同步飞书凭证 + 路由到 openclaw.json（失败仅警告，不阻断保存）
-    if let Err(e) = crate::commands::gateway::sync_openclaw_config_from_manager(&data_dir).await {
-        warn!("更新实例后同步网关配置失败: {}", e);
-    } else if matches!(
+    if let Err(e) = crate::commands::module::sync_module_configuration(&updated.module_id, &data_dir).await {
+        warn!("更新实例后同步模块配置失败: {}", e);
+    } else if updated.module_id == "openclaw" && matches!(
         updated.channel_type.as_str(),
         "wechat_clawbot" | "qq" | "wxwork"
     ) {
@@ -508,11 +533,13 @@ pub async fn delete_instance(
 
     // 从 YAML 读取当前实例（含 robot_id）
     let doc = read_instances_document(&config_path).await;
-    let robot_id = doc
+    let target = doc
         .instances
         .iter()
-        .find(|i| i.id == instance_id)
-        .and_then(|i| i.robot_id.clone());
+        .find(|instance| instance.id == instance_id)
+        .cloned()
+        .ok_or_else(|| format!("未找到实例: {}", instance_id))?;
+    let robot_id = target.robot_id.clone();
 
     let n_before = doc.instances.len();
     let mut doc = doc;
@@ -527,18 +554,21 @@ pub async fn delete_instance(
     write_instances_document(&config_path, &doc).await?;
 
     // 清理 openclaw extraDirs（不管引用计数，都要清除引用）
-    if let Some(ref rid) = robot_id {
-        cleanup_openclaw_extra_dirs(&data_dir, rid).await;
+    if target.module_id == "openclaw" {
+        if let Some(ref rid) = robot_id {
+            cleanup_openclaw_extra_dirs(&data_dir, rid).await;
+        }
     }
 
     // 删除 robots/{robot_id} 目录（引用计数归零才删）
-    if let Some(rid) = robot_id {
-        try_delete_robot_dir(&data_dir, &rid, &refs_after_delete).await;
+    if target.module_id == "openclaw" {
+        if let Some(rid) = robot_id {
+            try_delete_robot_dir(&data_dir, &rid, &refs_after_delete).await;
+        }
     }
 
-    // 同步 openclaw.json agents/bindings（失败仅警告）
-    if let Err(e) = crate::commands::gateway::sync_openclaw_config_from_manager(&data_dir).await {
-        warn!("删除实例后同步网关配置失败: {}", e);
+    if let Err(e) = crate::commands::module::sync_module_configuration(&target.module_id, &data_dir).await {
+        warn!("删除实例后同步模块配置失败: {}", e);
     }
 
     Ok(format!("实例 {} 已删除", instance_id))
@@ -563,12 +593,12 @@ pub async fn toggle_instance(
         .ok_or_else(|| format!("未找到实例: {}", instance_id))?;
     inst.enabled = enabled;
     inst.updated_at = chrono::Utc::now().to_rfc3339();
+    let module_id = inst.module_id.clone();
 
     write_instances_document(&config_path, &doc).await?;
 
-    // 同步飞书凭证 + 路由到 openclaw.json（失败仅警告，不阻断保存）
-    if let Err(e) = crate::commands::gateway::sync_openclaw_config_from_manager(&data_dir).await {
-        warn!("切换实例状态后同步网关配置失败: {}", e);
+    if let Err(e) = crate::commands::module::sync_module_configuration(&module_id, &data_dir).await {
+        warn!("切换实例状态后同步模块配置失败: {}", e);
     }
 
     Ok(format!(

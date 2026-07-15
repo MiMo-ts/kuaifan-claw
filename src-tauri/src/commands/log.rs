@@ -60,16 +60,30 @@ fn tail_lines(content: &str, max_lines: usize) -> String {
     lines[start..].join("\n")
 }
 
-/// 读取 OpenClaw 网关进程日志与管理端 app.log 尾部（供设置页轮询展示）
+/// 读取网关进程日志与管理端 app.log 尾部（供设置页轮询展示，支持模块切换）
 #[tauri::command]
 pub async fn read_runtime_logs_tail(
     data_dir: tauri::State<'_, crate::AppState>,
     lines: Option<usize>,
+    module: Option<String>,
 ) -> Result<RuntimeLogsTail, String> {
     let data_dir = data_dir.inner().get_data_dir();
     let n = lines.unwrap_or(400).min(3000).max(50);
 
-    let gateway_path = format!("{}/logs/{}", data_dir, OPENCLAW_GATEWAY_LOG);
+    // Hermes: 读取实际网关日志路径 %LOCALAPPDATA%/hermes/logs/gateway-stdio.log
+    let hermes_gateway_log = std::env::var("LOCALAPPDATA")
+        .map(|p| format!("{}/hermes/logs/gateway-stdio.log", p))
+        .unwrap_or_default();
+
+    let gateway_path = if module.as_deref() == Some("hermes") {
+        if std::path::Path::new(&hermes_gateway_log).exists() {
+            hermes_gateway_log
+        } else {
+            format!("{}/runtimes/hermes/hermes_runtime.log", data_dir)
+        }
+    } else {
+        format!("{}/logs/{}", data_dir, OPENCLAW_GATEWAY_LOG)
+    };
     let manager_path = format!("{}/logs/app.log", data_dir);
 
     let gateway = tokio::fs::read_to_string(&gateway_path)
@@ -89,11 +103,26 @@ pub async fn read_runtime_logs_tail(
 #[tauri::command]
 pub async fn clear_openclaw_gateway_log(
     data_dir: tauri::State<'_, crate::AppState>,
+    module: Option<String>,
 ) -> Result<String, String> {
     let data_dir = data_dir.inner().get_data_dir();
-    let path = format!("{}/logs/{}", data_dir, OPENCLAW_GATEWAY_LOG);
+    let hermes_gateway_log = std::env::var("LOCALAPPDATA")
+        .map(|p| format!("{}/hermes/logs/gateway-stdio.log", p))
+        .unwrap_or_default();
+
+    let path = if module.as_deref() == Some("hermes") {
+        if std::path::Path::new(&hermes_gateway_log).exists() {
+            hermes_gateway_log
+        } else {
+            format!("{}/runtimes/hermes/hermes_runtime.log", data_dir)
+        }
+    } else {
+        format!("{}/logs/{}", data_dir, OPENCLAW_GATEWAY_LOG)
+    };
     tokio::fs::write(&path, "")
         .await
         .map_err(|e| format!("清空网关日志失败: {}", e))?;
-    Ok("OpenClaw 网关日志已清空".to_string())
+    let label = if module.as_deref() == Some("hermes") { "Hermes" } else { "OpenClaw" };
+    Ok(format!("{} 网关日志已清空", label))
 }
+

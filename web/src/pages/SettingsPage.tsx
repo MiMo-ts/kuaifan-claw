@@ -26,6 +26,7 @@ import {
   CxIconTrash2,
 } from "../components/icons";
 import { useAppStore } from '../stores/appStore';
+import { moduleDefinition } from '../modules/registry';
 import AnsiUp from 'ansi-to-html';
 import { updateService, ReleaseInfo } from '../services/updateService';
 
@@ -71,6 +72,8 @@ type Theme = 'light' | 'dark' | 'system';
 export default function SettingsPage() {
   const navigate = useNavigate();
   const { setTheme: setStoreTheme, theme: storeTheme } = useAppStore();
+  const activeModule = useAppStore((state) => state.activeModule);
+  const activeModuleDefinition = moduleDefinition(activeModule);
   const [theme, setTheme] = useState<Theme>(storeTheme as Theme);
   const [saving, setSaving] = useState(false);
 
@@ -91,19 +94,19 @@ export default function SettingsPage() {
 
   const fetchRuntimeLogs = useCallback(async () => {
     try {
-      const data = await invoke<RuntimeLogsTail>('read_runtime_logs_tail', { lines: 500 });
+      const data = await invoke<RuntimeLogsTail>('read_module_logs_tail', { moduleId: activeModule, lines: 500 });
       setRuntimeLogs(data);
       if (logLiveRef.current && logPreRef.current) {
         requestAnimationFrame(() => { const el = logPreRef.current; if (el) el.scrollTop = el.scrollHeight; });
       }
     } catch { /* silent */ }
-  }, []);
+  }, [activeModule]);
 
   const handleRefreshLogs = async () => { setLogRefreshing(true); try { await fetchRuntimeLogs(); } finally { setLogRefreshing(false); } };
 
   const handleClearGatewayLog = async () => {
-    if (!window.confirm('确定清空 OpenClaw 网关日志文件？（不影响管理端 app.log）')) return;
-    try { await invoke<string>('clear_openclaw_gateway_log'); toast.success('网关日志已清空'); await fetchRuntimeLogs(); }
+    if (!window.confirm(`确定清空 ${activeModuleDefinition.name} 网关日志文件？（不影响管理端 app.log）`)) return;
+    try { await invoke<string>('clear_module_gateway_log', { moduleId: activeModule }); toast.success('网关日志已清空'); await fetchRuntimeLogs(); }
     catch (e) { toast.error(String(e)); }
   };
 
@@ -123,7 +126,7 @@ export default function SettingsPage() {
   useEffect(() => { invoke<string>('get_app_version').then(setCurrentAppVersion).catch(() => undefined); }, []);
 
   const handleReturnToWizard = () => {
-    if (!window.confirm('将回到「一站式安装向导」第一步。\n\n• 数据目录里的实例、机器人、YAML 配置仍会保留；仅重置本机向导进度。\n• 若已删除 openclaw-cn 文件夹，请在向导第 2 步「安装 OpenClaw-CN」重新安装后再启动网关。\n\n确定继续？')) return;
+    if (!window.confirm('将回到「一站式安装向导」第一步。\n\n• 数据目录里的实例、机器人、YAML 配置仍会保留；仅重置本机向导进度。\n• 若已删除 openclaw 文件夹，请在向导第 2 步「安装 OpenClaw」重新安装后再启动网关。\n\n确定继续？')) return;
     navigate('/wizard');
   };
 
@@ -215,7 +218,7 @@ export default function SettingsPage() {
 
             <SectionCard
               icon={CxIconTerminal} title="运行日志"
-              desc="实时显示 OpenClaw 网关与管理端尾部 · 错误行套红色"
+              desc={`实时显示 ${activeModuleDefinition.name} 网关与管理端尾部 · 错误行套红色`}
               right={
                 <div className="flex items-center gap-2">
                   <label className="flex items-center gap-1.5 text-[11.5px] cursor-pointer select-none px-2 h-7 rounded-md transition-colors duration-150"
@@ -238,7 +241,7 @@ export default function SettingsPage() {
                 </div>
               }>
               <div className="space-y-3">
-                <LogBlock label="OpenClaw 网关" filePath="logs/openclaw-gateway.log"
+                <LogBlock label={`${activeModuleDefinition.name} 网关`} filePath={activeModule === 'hermes' ? '%LOCALAPPDATA%/hermes/logs/gateway-stdio.log' : 'logs/openclaw-gateway.log'}
                   html={runtimeLogs?.gateway?.trim() ? ansiToHtmlGatewayLog(runtimeLogs.gateway) : escapeHtml('（暂无网关日志；启动网关后 stdout/stderr 将写入此文件）')}
                   empty={!runtimeLogs?.gateway?.trim()} onExpand={() => openLogModal('gateway')} preRef={logPreRef} />
                 <LogBlock label="管理端（Tauri）" filePath="logs/app.log"
@@ -396,10 +399,10 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between px-6 h-14 shrink-0" style={{ borderBottom: '1px solid ' + C.borderSoft }}>
               <div>
                 <h3 className="text-[14px] font-semibold" style={{ color: C.text }}>
-                  {logModal.type === 'gateway' ? 'OpenClaw 网关日志' : '管理端日志'}
+                  {logModal.type === 'gateway' ? `${activeModuleDefinition.name} 网关日志` : '管理端日志'}
                 </h3>
                 <p className="text-[11px] mt-0.5" style={{ color: C.textMute }}>
-                  {logModal.type === 'gateway' ? 'logs/openclaw-gateway.log · 实时输出' : 'logs/app.log · 实时输出'}
+                  {logModal.type === 'gateway' ? `${activeModule === 'hermes' ? '%LOCALAPPDATA%/hermes/logs/gateway-stdio.log' : 'logs/openclaw-gateway.log'} · 实时输出` : 'logs/app.log · 实时输出'}
                 </p>
               </div>
               <div className="flex items-center gap-2">

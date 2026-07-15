@@ -829,3 +829,34 @@ pub async fn run_env_auto_fix(
         messages,
     })
 }
+
+/// 检查 Hermes 运行时是否从内置包解压到数据目录
+#[tauri::command]
+pub fn check_hermes_bundled(data_dir: tauri::State<'_, crate::AppState>) -> Result<serde_json::Value, String> {
+    let dd = data_dir.inner().get_data_dir();
+    let runtime_dir = std::path::PathBuf::from(&dd).join("runtimes").join("hermes");
+    let hermes_cli = runtime_dir.join("hermes_cli").join("main.py");
+    let python_exe = runtime_dir.join("python").join("python.exe");
+    let installed = hermes_cli.exists() && python_exe.exists();
+    Ok(serde_json::json!({ "installed": installed }))
+}
+
+/// 检查 Hermes 所需 Python 环境（内 置或系统）
+#[tauri::command]
+pub fn check_hermes_env(data_dir: tauri::State<'_, crate::AppState>) -> Result<serde_json::Value, String> {
+    let dd = data_dir.inner().get_data_dir();
+    let runtime_dir = std::path::PathBuf::from(&dd).join("runtimes").join("hermes");
+    let python_exe = runtime_dir.join("python").join("python.exe");
+    let python_ok = if python_exe.exists() {
+        true
+    } else {
+        // 检查系统 Python
+        let check = if cfg!(windows) {
+            std::process::Command::new("cmd").args(["/c", "where", "python"]).output().map(|o| o.status.success()).unwrap_or(false)
+        } else {
+            std::process::Command::new("which").arg("python").output().map(|o| o.status.success()).unwrap_or(false)
+        };
+        check
+    };
+    Ok(serde_json::json!({ "python_available": python_ok }))
+}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useAppStore } from '../../stores/appStore';
 import {
   CxIconAlertTriangle,
   CxIconCheckCircle,
@@ -15,7 +16,7 @@ const NPM_ERROR_HINTS: Array<[string[], string]> = [
   [['ETIMEDOUT', 'ECONNREFUSED', 'network', 'timeout'], '网络连接超时。请检查网络代理/VPN 设置，或更换为可访问的 npm registry（设置 → registry）。'],
   [['EACCES', 'EPERM', 'access is denied', 'operation not permitted', '拒绝访问'], '权限错误。请确认本程序有写入数据目录的权限；部分杀毒软件可能拦截 node_modules 操作。'],
   [['ENOTFOUND', 'getaddrinfo'], 'DNS 解析失败，无法连接 registry。请检查网络或设置 registry（如 https://registry.npmmirror.com）。'],
-  [['ENOENT', 'not find', '找不到'], '找不到文件或目录。可能原因：npm 缓存损坏。请尝试关闭程序后手动删除「数据目录\\openclaw-cn\\node_modules」再重试。'],
+  [['ENOENT', 'not find', '找不到'], '找不到文件或目录。可能原因：npm 缓存损坏。请尝试关闭程序后手动删除「数据目录\\openclaw\\node_modules」再重试。'],
   [['ECONNRESET'], '连接被重置。请检查网络代理或更换 registry。'],
 ];
 
@@ -315,22 +316,109 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
     ? Math.round(progress.reduce((sum, p) => sum + p.progress, 0) / progress.length)
     : liveProgress?.percent ?? 0;
 
+  // ── Hermes 安装视图 ──
+  const activeModule = useAppStore((s) => s.activeModule);
+  if (activeModule === "hermes") {
+    return (
+      <div className="space-y-6">
+        <div className="text-center">
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">安装 Hermes</h2>
+          <p className="text-gray-600">
+            {installing ? '正在从内置包解压 Hermes Agent 运行环境…' : '一键安装：从内置包解压 Python 3.11 环境 + Hermes Agent 源码'}
+          </p>
+          {dataDir && (
+            <p className="text-xs text-slate-500 mt-2 break-all">
+              <span>数据目录：</span>
+              <span className="font-mono text-blue-600">{dataDir.replace(/\\/g, '/')}/runtimes/hermes</span>
+            </p>
+          )}
+        </div>
+
+        {!installed && !installing && (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={async () => {
+                setInstalling(true);
+                setError(null);
+                setLogs([]);
+                try {
+                  await invoke("install_hermes_runtime");
+                  setInstalled(true);
+                  setLogs((prev) => [...prev, `[${logTime()}] Hermes Agent 安装完成`]);
+                } catch (e: any) {
+                  setError(String(e?.message || e));
+                  setLogs((prev) => [...prev, `[${logTime()}] 安装失败: ${String(e?.message || e)}`]);
+                } finally {
+                  setInstalling(false);
+                }
+              }}
+              disabled={installing}
+              className="px-6 py-3 rounded-lg text-white font-semibold text-sm bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {installing ? (
+                <span className="flex items-center gap-2">
+                  <CxIconLoader className="w-4 h-4 animate-spin" />
+                  安装中…
+                </span>
+              ) : (
+                "一键安装 Hermes"
+              )}
+            </button>
+          </div>
+        )}
+
+        {installed && (
+          <div className="text-center space-y-3">
+            <div className="flex items-center justify-center gap-2 text-green-600">
+              <CxIconCheckCircle className="w-5 h-5" />
+              <span className="font-semibold">Hermes 已安装完成</span>
+            </div>
+            <button
+              type="button"
+              onClick={onNext}
+              className="px-5 py-2 rounded-lg text-white font-semibold text-sm bg-blue-600 hover:bg-blue-700 transition-colors"
+            >
+              完成，回到首页
+            </button>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2 p-3 rounded bg-red-50 border border-red-200 text-red-700 text-sm">
+            <CxIconXCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {logs.length > 0 && (
+          <div className="bg-gray-900 rounded-lg p-3 max-h-48 overflow-y-auto text-xs font-mono text-green-400 space-y-0.5">
+            {logs.map((l, i) => (
+              <div key={i}>{l}</div>
+            ))}
+            <div ref={logEndRef} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="text-center">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-2">安装 OpenClaw-CN</h2>
+        <h2 className="text-2xl font-semibold text-gray-900 mb-2">安装 OpenClaw</h2>
         <p className="text-gray-600">
           {installing
             ? '正在执行：拉取包 → 安装依赖，请稍候…'
-            : '分两步：先把 openclaw-cn 包放到数据目录，再在该目录执行 npm/pnpm install 生成 node_modules'}
+            : '分两步：先把 OpenClaw 包放到数据目录，再在该目录执行 npm/pnpm install 生成 node_modules'}
         </p>
         {dataDir && (
           <p className="text-xs text-slate-500 mt-2 max-w-2xl mx-auto break-all space-y-0.5">
             <span>本应用托管数据目录（与系统自带 Node/Git 路径无关）：</span>
             <span className="font-mono text-slate-600">{dataDir.replace(/\\/g, '/')}</span>
             <br />
-            <span>OpenClaw-CN 仓库：</span>
-            <span className="font-mono text-blue-600">{`${dataDir.replace(/\\/g, '/')}/openclaw-cn`}</span>
+            <span>OpenClaw 目录：</span>
+            <span className="font-mono text-blue-600">{`${dataDir.replace(/\\/g, '/')}/openclaw`}</span>
             <span>，Node/Git（如需安装）：</span>
             <span className="font-mono text-blue-600">{`${dataDir.replace(/\\/g, '/')}/env/`}</span>
           </p>
@@ -340,7 +428,7 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
       {statusLoading && (
         <div className="flex justify-center py-4 text-sm text-slate-500">
           <CxIconLoader className="w-4 h-4 animate-spin mr-2 mt-0.5" />
-          正在检测本机 OpenClaw-CN 安装状态…
+          正在检测本机 OpenClaw 安装状态…
         </div>
       )}
 
@@ -349,7 +437,7 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
           <div className="flex items-start gap-3">
             <CxIconCheckCircle className="w-6 h-6 text-green-600 shrink-0 mt-0.5" />
             <div className="text-sm text-green-900 space-y-1">
-              <p className="font-medium">检测到 OpenClaw-CN 已完整安装，可直接进入下一步。</p>
+              <p className="font-medium">检测到 OpenClaw 已完整安装，可直接进入下一步。</p>
               <p className="text-green-800/90">
                 版本 {cnStatus.version ?? '未知'}；入口与 node_modules 已就绪。
               </p>
@@ -368,7 +456,7 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
           <div className="flex items-start gap-3">
             <CxIconLoader className="w-6 h-6 text-blue-500 shrink-0 mt-0.5 animate-spin" />
             <div className="text-sm text-blue-900 space-y-1">
-              <p className="font-medium">OpenClaw-CN 正在后台安装（npm install 运行中）</p>
+              <p className="font-medium">OpenClaw 正在后台安装（npm install 运行中）</p>
               <p className="text-blue-800/90">
                 node_modules 正在后台补全，无需等待安装完成即可继续其他配置步骤。
               </p>
@@ -385,7 +473,7 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-left max-w-2xl mx-auto text-sm text-amber-950">
           <p className="font-medium mb-1">未检测到完整安装</p>
           <ul className="list-disc pl-5 space-y-0.5 text-amber-900/90">
-            <li>程序入口 dist/entry.js：{cnStatus.coreReady ? '已存在' : '缺失或损坏'}</li>
+            <li>程序入口 openclaw.mjs：{cnStatus.coreReady ? '已存在' : '缺失或损坏'}</li>
             <li>依赖 node_modules：{cnStatus.depsReady ? '已就绪' : '缺失或不完整'}</li>
           </ul>
           <p className="mt-2 text-xs text-amber-900/80">请点击下方「开始安装」完成拉包与依赖安装。</p>
@@ -404,7 +492,7 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
             <p className="text-gray-600 mb-2">
               {cnStatus?.fullyReady
                 ? '无需重复安装时可直接点「下一步」；需要修复时再执行安装。'
-                : '点击下方按钮开始安装 OpenClaw-CN（已安装完整时会自动跳过拉包与重复 npm install）'}
+                : '点击下方按钮开始安装 OpenClaw（已安装完整时会自动跳过拉包与重复 npm install）'}
             </p>
             {!cnStatus?.fullyReady && (
               <p className="text-amber-600 text-sm">

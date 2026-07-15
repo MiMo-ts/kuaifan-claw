@@ -4,7 +4,7 @@
   "version": "1.0.51",
   "identifier": "com.mimo.kuaifan-claw",
   "build": {
-    "beforeDevCommand": null,
+    "beforeDevCommand": "npm --prefix web run dev",
     "beforeBuildCommand": null,
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../web/dist"
@@ -48,11 +48,14 @@
     "category": "DeveloperTool",
     "resources": [
       "bundled-env/*",
-      "bundled-openclaw/*",
+      "bundled-openclaw/openclaw.tgz",
+      "bundled-hermes/*",
       "resources/data",
       "resources/skills-env",
       "resources/plugins",
-      "resources/patches"
+      "resources/data/config/plugin_manifests/*",
+      "resources/patches",
+      "runtimes/**/*"
     ],
     "icon": [
       "icons/32x32.png",

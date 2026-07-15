@@ -22,6 +22,7 @@ import {
   CxIconWizardRobot,
 } from "../icons";
 import QuickBindModal, { type QuickBindPlatform, type QuickBindCompleteData } from './QuickBindModal';
+import type { ModuleId } from '../../modules/registry';
 
 interface RobotTemplateSync {
   id: string;
@@ -45,6 +46,7 @@ interface Props {
   onPrev: () => void;
   selectedRobot: any;
   isLastStep: boolean;
+  moduleId?: ModuleId;
 }
 
 const C = {
@@ -67,12 +69,19 @@ const STEPS = [
   { n: 6, label: '命名', desc: '设置实例名称' },
 ];
 
-const CHANNELS = [
-  { id: 'feishu', name: '飞书（内置）', icon: '📨' },
-  { id: 'wxwork', name: '企业微信', icon: '🏢', pluginId: 'wecom' },
-  { id: 'wechat_clawbot', name: '微信 ClawBot', icon: '💬', pluginId: 'wechat_clawbot' },
-  { id: 'qq', name: 'QQ', icon: '🐧', pluginId: 'qq' },
+const ALL_CHANNELS = [
+  // OpenClaw 渠道（需安装 npm 插件）
+  { id: 'feishu', name: '飞书', icon: '📨', modules: ['openclaw'], pluginId: 'feishu' },
+  { id: 'wxwork', name: '企业微信', icon: '🏢', modules: ['openclaw'], pluginId: 'wecom' },
+  { id: 'wechat_clawbot', name: '微信', icon: '💬', modules: ['openclaw'], pluginId: 'wechat_clawbot' },
+  { id: 'qq', name: 'QQ', icon: '🐧', modules: ['openclaw'], pluginId: 'qq' },
+  // Hermes 渠道（内置平台适配器，无需安装插件）
+  { id: 'feishu', name: '飞书', icon: '📨', modules: ['hermes'] },
 ];
+
+function getChannels(moduleId: string) {
+  return ALL_CHANNELS.filter(ch => ch.modules.includes(moduleId));
+}
 
 const PROVIDER_OPTIONS = [
   { id: 'kuaifan', name: '快泛API（推荐免费模型）' },
@@ -229,7 +238,7 @@ function blurRing(e: any) {
   e.currentTarget.style.boxShadow = 'none';
 }
 
-export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Props) {
+export default function CreateInstance({ onComplete, onPrev, selectedRobot, moduleId = 'openclaw' }: Props) {
   const [step, setStep] = useState(1);
   const [instanceName, setInstanceName] = useState('');
   const [selectedChannel, setSelectedChannel] = useState('');
@@ -294,7 +303,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
 
   useEffect(() => {
     if (step !== 2) return;
-    const pluginIds = CHANNELS.filter(ch => ch.pluginId).map(ch => ch.pluginId!);
+    const pluginIds = getChannels(moduleId).filter(ch => ch.pluginId).map(ch => ch.pluginId!);
     for (const pid of pluginIds) {
       invoke<boolean>('check_plugin_installed', { pluginId: pid })
         .then(installed => setPluginState(prev => ({ ...prev, [pid]: { ...prev[pid], installed } })))
@@ -348,7 +357,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
       await invoke('create_instance', {
         name: trimmedName, robotId: activeRobot?.id ?? null,
         channelType: selectedChannel, channelConfig, modelConfig,
-        maxHistory: 50, responseMode: 'stream',
+        maxHistory: 50, responseMode: 'stream', moduleId,
       });
       setCreated(true);
     } catch (e) {
@@ -518,7 +527,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
                 <StepHeader title="选择聊天渠道" desc="点击卡片选择通道，需先安装对应插件" icon={CxIconChannel} />
                 <div className="px-6 pb-6 space-y-3">
                   <div className="grid grid-cols-3 gap-2.5">
-                    {CHANNELS.map(ch => {
+                    {getChannels(moduleId).map(ch => {
                       const ps = ch.pluginId ? pluginState[ch.pluginId] : null;
                       const installed = ps?.installed ?? false;
                       const installing = ps?.installing ?? false;
@@ -811,7 +820,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
               <div>
                 <StepHeader
                   title="配置通道凭证"
-                  desc={CHANNELS.find(c => c.id === selectedChannel)?.name || '当前渠道'}
+                  desc={getChannels(moduleId).find(c => c.id === selectedChannel)?.name || '当前渠道'}
                   icon={CxIconCredentials}
                 />
                 <div className="px-6 pb-6 space-y-3">
@@ -862,7 +871,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
                   )}
 
                   <p className="text-[11.5px]" style={{ color: C.textMute }}>
-                    {CHANNELS.find(c => c.id === selectedChannel)?.name ?? '当前渠道'}：也可手动填写各开放平台控制台中的凭证。
+                    {getChannels(moduleId).find(c => c.id === selectedChannel)?.name ?? '当前渠道'}：也可手动填写各开放平台控制台中的凭证。
                   </p>
 
                   {selectedChannel === 'feishu' && (
@@ -977,7 +986,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
                     style={{ background: C.bgElev, border: '1px solid ' + C.borderSoft }}
                   >
                     <ConfirmRow label="机器人" value={activeRobot?.name || selectedRobot?.name || '未选择（使用通用人设）'} />
-                    <ConfirmRow label="聊天渠道" value={CHANNELS.find(c => c.id === selectedChannel)?.name || '—'} />
+                    <ConfirmRow label="聊天渠道" value={getChannels(moduleId).find(c => c.id === selectedChannel)?.name || '—'} />
                     <ConfirmRow
                       label="模型"
                       value={
@@ -1021,7 +1030,7 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot }: Pr
                       style={inputStyle}
                       onFocus={focusRing}
                       onBlur={blurRing}
-                      placeholder={`${CHANNELS.find(c => c.id === selectedChannel)?.name}-${activeRobot?.name || '通用助手'}-01`}
+                      placeholder={`${getChannels(moduleId).find(c => c.id === selectedChannel)?.name}-${activeRobot?.name || '通用助手'}-01`}
                     />
                     <p className="mt-1.5 text-[11px]" style={{ color: C.textMute }}>
                       建议使用「渠道-机器人-序号」格式便于区分。

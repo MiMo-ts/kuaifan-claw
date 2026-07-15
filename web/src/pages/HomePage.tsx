@@ -1,18 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import toast from 'react-hot-toast';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import toast from "react-hot-toast";
+import ModuleCardsModal from "../components/ModuleCardsModal";
 import {
   CxIconDownload,
   CxIconLoader,
   CxIconMonitor,
   CxIconPlay,
   CxIconPower,
+  CxIconRobots,
 } from "../components/icons";
+import HermesPage from "./HermesPage";
+import ModuleGuiFrame from "../components/layout/ModuleGuiFrame";
 import { useAppStore } from "../stores/appStore";
-import { checkForUpdate, downloadAndInstallUpdate, UpdateProgress } from "../utils/updater";
-import ModuleCardsModal from "../components/ModuleCardsModal";
-import ModelConfigModal from "../components/ModelConfigModal";
-import CodexChatArea from "../components/layout/CodexChatArea";
+import { useRuntimeStore } from "../stores/runtimeStore";
+import { checkForUpdate, downloadAndInstallUpdate, type UpdateProgress } from "../utils/updater";
 
 interface GatewayStatus {
   running: boolean;
@@ -20,233 +22,284 @@ interface GatewayStatus {
   port: number;
   uptime_seconds: number;
   memory_mb: number;
-  instances_running?: number;
 }
 
 export default function HomePage() {
-  const { gatewayRunning, setGatewayRunning } = useAppStore();
+  const setGatewayRunning = useAppStore((state) => state.setGatewayRunning);
+  const activeModule = useAppStore((state) => state.activeModule);
+  const runtimes = useRuntimeStore((state) => state.runtimes);
+  const scanRuntimes = useRuntimeStore((state) => state.scanRuntimes);
+  const startRuntime = useRuntimeStore((state) => state.startRuntime);
+  const stopRuntime = useRuntimeStore((state) => state.stopRuntime);
+  const checkRuntimeHealth = useRuntimeStore((state) => state.checkRuntimeHealth);
+
   const [hydrated, setHydrated] = useState(false);
   const [gatewayBusy, setGatewayBusy] = useState(false);
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
-
-  // Update
+  const [openclawGuiUrl, setOpenclawGuiUrl] = useState<string | null>(null);
+  const [moduleCardsOpen, setModuleCardsOpen] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateVersion, setUpdateVersion] = useState("");
-  const [, setUpdateNotes] = useState("");
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const operationLockRef = useRef(false);
 
-  // Modals
-  const [modelConfigOpen, setModelConfigOpen] = useState(false);
-  const [moduleCardsOpen, setModuleCardsOpen] = useState(false);
+  const hermesRuntime = runtimes.find((runtime) => runtime.id === "hermes") ?? null;
+  const isHermes = activeModule === "hermes";
+  const isOnline = isHermes ? Boolean(hermesRuntime?.running) : Boolean(gatewayStatus?.running);
+  const activePort = isHermes ? hermesRuntime?.guiPort || 0 : gatewayStatus?.port || 0;
 
-  const gatewayRunningRef = useRef(gatewayRunning);
-  useEffect(() => { gatewayRunningRef.current = gatewayRunning; }, [gatewayRunning]);
-
-  // Hydration
   useEffect(() => {
-    if (useAppStore.persist.hasHydrated()) { setHydrated(true); return; }
-    const unsub = useAppStore.persist.onFinishHydration(() => setHydrated(true));
-    return unsub;
+    if (useAppStore.persist.hasHydrated()) {
+      setHydrated(true);
+      return;
+    }
+    return useAppStore.persist.onFinishHydration(() => setHydrated(true));
   }, []);
 
-  // Load initial data
-  useEffect(() => { if (!hydrated) return; loadInitial(); }, [hydrated]);
-
-  const loadInitial = async () => {
-    try {
-      const [status] = await Promise.all([
-        invoke<GatewayStatus>("get_gateway_status"),
-        invoke<{ provider?: string; model_name?: string }>("get_default_model").catch(() => null),
-      ]);
-      setGatewayStatus(status);
-      setGatewayRunning(status.running);
-      const KEY = 'openclaw-module-center-shown';
-      if (!status.running && !localStorage.getItem(KEY)) {
-        localStorage.setItem(KEY, '1');
-        setTimeout(() => setModuleCardsOpen(true), 500);
-      }
-    } catch {
-      const KEY = 'openclaw-module-center-shown';
-      if (!localStorage.getItem(KEY)) {
-        localStorage.setItem(KEY, '1');
-        setTimeout(() => setModuleCardsOpen(true), 500);
-      }
-    }
-  };
-
-  // Poll gateway status
-  const pollGateway = useCallback(async () => {
-    if (gatewayBusy || gatewayOpLockRef.current) return;
+  const loadOpenClawStatus = useCallback(async () => {
     try {
       const status = await invoke<GatewayStatus>("get_gateway_status");
       setGatewayStatus(status);
       setGatewayRunning(status.running);
-    } catch { /* ignore */ }
-  }, [gatewayBusy]);
+    } catch {
+      setGatewayStatus((current) => current ?? {
+        running: false,
+        port: 0,
+        uptime_seconds: 0,
+        memory_mb: 0,
+      });
+    }
+  }, [setGatewayRunning]);
 
   useEffect(() => {
     if (!hydrated) return;
-    const id = window.setInterval(pollGateway, 5000);
-    const onVis = () => { if (document.visibilityState === "visible") void pollGateway(); };
-    document.addEventListener("visibilitychange", onVis);
-    return () => { window.clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
-  }, [hydrated, pollGateway]);
+    void loadOpenClawStatus();
+    void scanRuntimes();
+  }, [hydrated, loadOpenClawStatus, scanRuntimes]);
 
-  // Module cards event listener
   useEffect(() => {
-    const handler = () => setModuleCardsOpen(true);
-    window.addEventListener("openModuleCards", handler);
-    return () => window.removeEventListener("openModuleCards", handler);
+    if (!hydrated) return;
+    const poll = () => {
+      if (operationLockRef.current) return;
+      if (activeModule === "hermes") {
+        void checkRuntimeHealth("hermes");
+      } else {
+        void loadOpenClawStatus();
+      }
+    };
+    const timer = window.setInterval(poll, 5_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") poll();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [activeModule, checkRuntimeHealth, hydrated, loadOpenClawStatus]);
+
+  useEffect(() => {
+    if (!hydrated || isHermes || !gatewayStatus?.running) {
+      if (!isHermes) setOpenclawGuiUrl(null);
+      return;
+    }
+    let cancelled = false;
+    void invoke<string>("get_openclaw_embedded_gui_url")
+      .then((url) => {
+        if (!cancelled) setOpenclawGuiUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setOpenclawGuiUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayStatus?.port, gatewayStatus?.running, hydrated, isHermes]);
+
+  useEffect(() => {
+    const openModules = () => setModuleCardsOpen(true);
+    window.addEventListener("openModuleCards", openModules);
+    return () => window.removeEventListener("openModuleCards", openModules);
   }, []);
 
-  // Check for updates
   useEffect(() => {
     if (!hydrated) return;
-    const doCheck = async () => {
-      try {
-        const info = await checkForUpdate();
-        if (info.available) {
-          setUpdateAvailable(true);
-          setUpdateVersion(info.version || "");
-          setUpdateNotes(info.body || "");
-        }
-      } catch { /* ignore */ }
-    };
-    const t = window.setTimeout(doCheck, 3000);
-    return () => window.clearTimeout(t);
+    const timer = window.setTimeout(() => {
+      void checkForUpdate().then((info) => {
+        if (!info.available) return;
+        setUpdateAvailable(true);
+        setUpdateVersion(info.version || "");
+      }).catch(() => undefined);
+    }, 3_000);
+    return () => window.clearTimeout(timer);
   }, [hydrated]);
 
-  const gatewayOpLockRef = useRef(false);
-
   const handleToggleGateway = useCallback(async () => {
-    if (gatewayBusy) return;
-    const isRunning = gatewayRunningRef.current;
+    if (gatewayBusy || operationLockRef.current) return;
+    operationLockRef.current = true;
     setGatewayBusy(true);
-    gatewayOpLockRef.current = true;
-    const toastId = toast.loading(isRunning ? "正在停止网关..." : "正在启动网关...", {
-      style: { background: "var(--cx-bg-overlay)", color: "var(--cx-text)", border: "1px solid var(--cx-border)" },
-    });
+    const stopping = isOnline;
+    const toastId = toast.loading(stopping ? "正在停止网关..." : "正在启动网关...");
+
     try {
-      if (isRunning) {
+      if (isHermes) {
+        if (stopping) {
+          await stopRuntime("hermes");
+        } else {
+          await startRuntime("hermes");
+        }
+        await scanRuntimes();
+      } else if (stopping) {
         await invoke("stop_gateway");
         setGatewayRunning(false);
         setGatewayStatus({ running: false, port: 0, uptime_seconds: 0, memory_mb: 0 });
-        toast.success("网关已停止", { id: toastId });
       } else {
         await invoke("start_gateway");
-        const status = await invoke<GatewayStatus>("get_gateway_status");
-        setGatewayRunning(status.running);
-        setGatewayStatus(status);
-        toast.success(status.running ? "网关已启动" : "网关启动失败", { id: toastId });
+        await loadOpenClawStatus();
       }
-    } catch (e) {
-      setGatewayRunning(isRunning);
-      try {
-        const status = await invoke<GatewayStatus>("get_gateway_status");
-        setGatewayStatus(status);
-        setGatewayRunning(status.running);
-      } catch { /* 查询失败则保持当前显示 */ }
-      toast.error(`操作失败: ${e instanceof Error ? e.message : String(e)}`, { id: toastId });
+      toast.success(stopping ? "网关已停止" : "网关已启动", { id: toastId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`操作失败：${message}`, { id: toastId });
+      if (isHermes) await scanRuntimes();
+      else await loadOpenClawStatus();
     } finally {
       setGatewayBusy(false);
-      setTimeout(() => { gatewayOpLockRef.current = false; }, 3000);
+      window.setTimeout(() => {
+        operationLockRef.current = false;
+      }, 800);
     }
-  }, [gatewayBusy, setGatewayRunning]);
+  }, [
+    gatewayBusy,
+    isHermes,
+    isOnline,
+    loadOpenClawStatus,
+    scanRuntimes,
+    setGatewayRunning,
+    startRuntime,
+    stopRuntime,
+  ]);
 
   const handleUpdate = async () => {
     if (isUpdating) return;
     setIsUpdating(true);
-    try { await downloadAndInstallUpdate((p) => setUpdateProgress(p)); }
-    catch (e) { toast.error(`更新失败: ${e}`); setIsUpdating(false); setUpdateProgress(null); }
+    try {
+      await downloadAndInstallUpdate(setUpdateProgress);
+    } catch (error) {
+      toast.error(`更新失败：${String(error)}`);
+      setIsUpdating(false);
+      setUpdateProgress(null);
+    }
   };
 
   if (!hydrated) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ background: "var(--cx-bg)" }}>
-        <CxIconLoader className="cx-animate-spin w-5 h-5" style={{ color: "var(--cx-accent)" }} />
+      <div className="flex h-full items-center justify-center" style={{ background: "var(--cx-bg)" }}>
+        <CxIconLoader className="h-5 w-5 animate-spin" style={{ color: "var(--cx-accent)" }} />
       </div>
     );
   }
 
-  const isOnline = gatewayStatus?.running;
-
   return (
-    <div className="flex flex-col h-full" style={{ background: "var(--cx-bg)" }}>
-      {/* Top bar */}
-      <div className="h-11 px-5 flex items-center justify-between shrink-0 gap-3 backdrop-blur-md"
-        style={{ borderBottom: "1px solid var(--cx-border-soft)", background: "var(--cx-topbar-bg)" }}>
-        <div className="flex items-center gap-3">
-          <span className="text-[13px] font-medium" style={{ color: "var(--cx-text)" }}>快泛 Claw</span>
-          <span className="cx-badge"
-            style={isOnline ? { background: "var(--cx-success-soft)", color: "var(--cx-success)" } : { background: "var(--cx-error-soft)", color: "var(--cx-error)" }}>
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: isOnline ? "var(--cx-success)" : "var(--cx-error)" }} />
-            {isOnline ? `运行中:${gatewayStatus?.port}` : "未启动"}
+    <div className="flex h-full flex-col" style={{ background: "var(--cx-bg)" }}>
+      <div
+        className="flex h-11 shrink-0 items-center justify-between gap-3 px-5"
+        style={{ borderBottom: "1px solid var(--cx-border-soft)", background: "var(--cx-topbar-bg)" }}
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="text-[13px] font-semibold" style={{ color: "var(--cx-text)" }}>
+            {isHermes ? "Hermes" : "OpenClaw"}
           </span>
-          {updateAvailable && !isUpdating && (
-            <button onClick={handleUpdate} className="cx-btn cx-btn-primary" style={{ padding: "2px 10px", fontSize: 11 }}>
-              <CxIconDownload className="w-3 h-3" />更新 v{updateVersion}
+          <span
+            className="cx-badge"
+            style={isOnline
+              ? { background: "var(--cx-success-soft)", color: "var(--cx-success)" }
+              : { background: "var(--cx-error-soft)", color: "var(--cx-error)" }}
+          >
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: "currentColor" }} />
+            {isOnline ? `运行中 · ${activePort}` : "未启动"}
+          </span>
+          {updateAvailable && !isUpdating ? (
+            <button type="button" onClick={handleUpdate} className="cx-btn cx-btn-primary" style={{ padding: "2px 9px", fontSize: 11 }}>
+              <CxIconDownload className="h-3 w-3" />更新 v{updateVersion}
             </button>
-          )}
+          ) : null}
         </div>
+
         <div className="flex items-center gap-1.5">
           <button
-            onClick={() => invoke('open_openclaw_console').catch(() => {})}
-            className="flex items-center gap-1 px-2 h-7 rounded text-[11px] font-medium transition-all duration-150"
-            style={{
-              color: 'var(--cx-text-mute)',
-              border: '1px solid var(--cx-border-soft)',
-            }}
-            title="在浏览器中打开网关控制台"
+            type="button"
+            onClick={() => setModuleCardsOpen(true)}
+            className="flex h-7 items-center gap-1 rounded px-2 text-[11px]"
+            style={{ color: "var(--cx-text-mute)", border: "1px solid var(--cx-border-soft)" }}
           >
-            <CxIconMonitor className="w-3 h-3" /> 控制台
+            <CxIconRobots className="h-3 w-3" />模块
           </button>
+          {!isHermes ? (
+            <button
+              type="button"
+              onClick={() => invoke("open_openclaw_console").catch(() => undefined)}
+              className="flex h-7 items-center gap-1 rounded px-2 text-[11px]"
+              style={{ color: "var(--cx-text-mute)", border: "1px solid var(--cx-border-soft)" }}
+            >
+              <CxIconMonitor className="h-3 w-3" />控制台
+            </button>
+          ) : null}
           <button
+            type="button"
             onClick={handleToggleGateway}
             disabled={gatewayBusy}
-            className="flex items-center gap-1.5 px-2.5 h-7 rounded-md text-[12px] font-medium transition-all duration-150 disabled:opacity-50"
+            className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium disabled:opacity-50"
             style={{
-              background: isOnline ? 'rgba(200,85,74,0.08)' : 'rgba(74,158,92,0.10)',
-              color: isOnline ? 'var(--cx-error)' : 'var(--cx-success)',
-              border: `1px solid ${isOnline ? 'rgba(200,85,74,0.18)' : 'rgba(74,158,92,0.22)'}`,
+              background: isOnline ? "var(--cx-error-soft)" : "var(--cx-success-soft)",
+              color: isOnline ? "var(--cx-error)" : "var(--cx-success)",
+              border: "1px solid var(--cx-border-soft)",
             }}
           >
             {gatewayBusy ? (
-              <CxIconLoader className="w-3 h-3 animate-spin" />
+              <CxIconLoader className="h-3 w-3 animate-spin" />
             ) : isOnline ? (
-              <CxIconPower className="w-3 h-3" />
+              <CxIconPower className="h-3 w-3" />
             ) : (
-              <CxIconPlay className="w-3 h-3" style={{ fill: 'currentColor' }} />
+              <CxIconPlay className="h-3 w-3" />
             )}
-            <span>{gatewayBusy ? (isOnline ? '停止中…' : '启动中…') : (isOnline ? '停止' : '启动')}</span>
+            {gatewayBusy ? "处理中" : isOnline ? "停止" : "启动"}
           </button>
         </div>
       </div>
 
-      {/* Update progress */}
-      {isUpdating && updateProgress && (
-        <div className="px-4 py-2" style={{ background: "var(--cx-bg-soft)", borderBottom: "1px solid var(--cx-border-soft)" }}>
-          <div className="text-[12px]" style={{ color: "var(--cx-text-soft)" }}>更新中:{updateProgress.percentage?.toFixed(0)}%</div>
-          <div className="mt-1 h-1 rounded-full" style={{ background: "var(--cx-border-soft)" }}>
-            <div className="h-full rounded-full transition-all" style={{ width: `${updateProgress.percentage ?? 0}%`, background: "var(--cx-accent)" }} />
+      {isUpdating && updateProgress ? (
+        <div className="px-4 py-2" style={{ borderBottom: "1px solid var(--cx-border-soft)" }}>
+          <div className="text-[11px]" style={{ color: "var(--cx-text-mute)" }}>
+            更新中 {updateProgress.percentage?.toFixed(0)}%
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Main content: chat area (using OpenClaw gateway agent) */}
-      <div className="flex-1 min-h-0">
-        <CodexChatArea
-          title="新对话"
-          gatewayRunning={isOnline ?? false}
-          gatewayBusy={gatewayBusy}
-          gatewayPort={gatewayStatus?.port ?? 0}
-          onToggleGateway={handleToggleGateway}
-        />
+      <div className="min-h-0 flex-1">
+        {isHermes ? (
+          <HermesPage
+            guiUrl={hermesRuntime?.guiUrl}
+            version={hermesRuntime?.version}
+            running={isOnline}
+            port={activePort}
+            busy={gatewayBusy}
+            onToggle={handleToggleGateway}
+            onRefresh={() => void scanRuntimes()}
+          />
+        ) : (
+          <ModuleGuiFrame
+            moduleId="openclaw"
+            guiUrl={openclawGuiUrl}
+            running={isOnline}
+            busy={gatewayBusy}
+            onStart={handleToggleGateway}
+          />
+        )}
       </div>
 
-      {/* Modals */}
-      {moduleCardsOpen && <ModuleCardsModal onClose={() => setModuleCardsOpen(false)} />}
-      {modelConfigOpen && <ModelConfigModal onClose={() => { setModelConfigOpen(false); loadInitial(); }} />}
+      {moduleCardsOpen ? <ModuleCardsModal onClose={() => setModuleCardsOpen(false)} /> : null}
     </div>
   );
 }

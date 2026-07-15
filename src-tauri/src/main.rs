@@ -1,4 +1,4 @@
-﻿// OpenClaw-CN Manager - Rust Backend
+﻿// OpenClaw Manager - Rust Backend
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -65,7 +65,7 @@ fn strip_extended_prefix(p: &std::path::Path) -> std::path::PathBuf {
 
 /// 
 fn diagnostics_dir() -> PathBuf {
-    std::env::temp_dir().join("OpenClaw-CN-Manager")
+    std::env::temp_dir().join("OpenClaw-Manager")
 }
 
 fn write_diagnostic_file(name: &str, content: &str) {
@@ -96,31 +96,31 @@ fn fallback_user_data_dir() -> PathBuf {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir())
-            .join("OpenClaw-CN Manager")
+            .join("OpenClaw Manager")
             .join("data")
     }
     #[cfg(target_os = "macos")]
     {
-        // macOS: ~/Library/Application Support/OpenClaw-CN Manager/data
+        // macOS: ~/Library/Application Support/OpenClaw Manager/data
         std::env::var_os("HOME")
             .map(PathBuf::from)
-            .map(|h| h.join("Library").join("Application Support").join("OpenClaw-CN Manager").join("data"))
-            .unwrap_or_else(|| std::env::temp_dir().join("OpenClaw-CN-Manager-data"))
+            .map(|h| h.join("Library").join("Application Support").join("OpenClaw Manager").join("data"))
+            .unwrap_or_else(|| std::env::temp_dir().join("OpenClaw-Manager-data"))
     }
     #[cfg(target_os = "linux")]
     {
-        // Linux: ~/.local/share/OpenClaw-CN Manager/data
+        // Linux: ~/.local/share/OpenClaw Manager/data
         std::env::var_os("HOME")
             .map(PathBuf::from)
-            .map(|h| h.join(".local/share/OpenClaw-CN Manager/data"))
-            .unwrap_or_else(|| std::env::temp_dir().join("OpenClaw-CN-Manager-data"))
+            .map(|h| h.join(".local/share/OpenClaw Manager/data"))
+            .unwrap_or_else(|| std::env::temp_dir().join("OpenClaw-Manager-data"))
     }
     #[cfg(target_os = "freebsd")]
     {
         std::env::var_os("HOME")
             .map(PathBuf::from)
-            .map(|h| h.join(".local/share/OpenClaw-CN Manager/data"))
-            .unwrap_or_else(|| std::env::temp_dir().join("OpenClaw-CN-Manager-data"))
+            .map(|h| h.join(".local/share/OpenClaw Manager/data"))
+            .unwrap_or_else(|| std::env::temp_dir().join("OpenClaw-Manager-data"))
     }
 }
 
@@ -201,7 +201,7 @@ fn resolve_release_data_dir(exe_path: &std::path::Path) -> std::path::PathBuf {
         return portable_data_dir;
     }
     // 
-    let portable_flag = exe_dir.join("OpenClaw-CN.portable");
+    let portable_flag = exe_dir.join("OpenClaw.portable");
     if portable_flag.exists() {
         return portable_data_dir;
     }
@@ -250,7 +250,7 @@ fn msi_bootstrap(exe_path: &std::path::Path) {
     }
 
     const KEY_READ: u32 = 0x20019;
-    let subkey: Vec<u16> = "Software\\openclaw-cn\\OpenClaw-CN Manager\0"
+    let subkey: Vec<u16> = "Software\\openclaw\\OpenClaw Manager\0"
         .encode_utf16()
         .collect();
     let value_name: Vec<u16> = "InstallDir\0".encode_utf16().collect();
@@ -382,7 +382,7 @@ const RESOURCE_MIGRATE_SKIP_DIRS: &[&str] = &[
     "backups",
     "logs",
     "metrics",
-    "openclaw-cn",
+    "openclaw",
     "plugins",
     "robots",
     "instances",
@@ -476,8 +476,8 @@ fn main() {
     // 
     // 
     let data_dir_abs: PathBuf = if cfg!(debug_assertions) {
-        // 
-        PathBuf::from(r"D:\ORD\data")
+        // 开发模式：数据目录放在 debug/ 同级（exe 所在目录下的 data/）
+        exe_path.parent().map(|p| p.join("data")).unwrap_or_else(|| PathBuf::from("data"))
     } else {
         ensure_writable_release_data_dir(&exe_path)
     };
@@ -580,6 +580,8 @@ fn main() {
             commands::env::check_disk_space,
             commands::env::run_env_check,
             commands::env::run_env_auto_fix,
+            commands::env::check_hermes_bundled,
+            commands::env::check_hermes_env,
             commands::installer::install_node,
             commands::installer::install_homebrew,
             commands::installer::install_git,
@@ -642,6 +644,7 @@ fn main() {
             commands::gateway::get_gateway_ws_info,
             commands::gateway::proxy_gateway_chat,
             commands::gateway::open_openclaw_console,
+            commands::gateway::get_openclaw_embedded_gui_url,
             commands::gateway::get_gateway_usage,
             commands::backup::list_backups,
             commands::backup::create_backup,
@@ -657,6 +660,10 @@ fn main() {
             commands::log::clear_logs,
             commands::log::read_runtime_logs_tail,
             commands::log::clear_openclaw_gateway_log,
+            commands::module::get_module_catalog,
+            commands::module::read_module_logs_tail,
+            commands::module::clear_module_gateway_log,
+            commands::module::sync_active_module_configuration,
             commands::system::open_folder,
             commands::system::open_manager_config_dir,
             commands::system::open_url,
@@ -713,7 +720,15 @@ fn main() {
             commands::auth::get_self,
             commands::auth::get_user_id,
             // Token commands
-            commands::token::auto_configure_api_key,        ])
+            commands::token::auto_configure_api_key,
+            // Hermes runtime management
+            commands::runtime::scan_runtimes,
+            commands::runtime::get_runtime_list,
+            commands::runtime::start_runtime,
+            commands::runtime::stop_runtime,
+            commands::runtime::get_runtime_status,
+            commands::runtime::install_hermes_runtime,
+        ])
         .setup(|app| {
             tracing::info!("Tauri app initialization complete");
 

@@ -40,7 +40,7 @@ pub struct PluginManifest { pub id: String, pub name: String, pub version: Strin
 // ============================================================
 // QR 码生成
 // ============================================================
-fn generate_qr_base64(url: &str) -> Result<String, String> {
+pub(crate) fn generate_qr_base64(url: &str) -> Result<String, String> {
     use image::Luma; use qrcode::QrCode;
     let code = QrCode::new(url).map_err(|e| format!("QR: {}", e))?;
     let img = code.render::<Luma<u8>>().min_dimensions(300, 300).build();
@@ -198,12 +198,13 @@ pub async fn poll_qrcode_auth(app: AppHandle, data_dir: tauri::State<'_, crate::
 // ============================================================
 // WeChat CLI 快捷绑定（后台执行，不弹窗）
 // ============================================================
-static ACTIVE_WECHAT_QR: Mutex<Option<(String, String)>> = Mutex::new(None);
+static ACTIVE_WECHAT_QR: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 
 #[tauri::command]
-pub async fn start_wechat_cli_bind(data_dir: tauri::State<'_, crate::AppState>) -> Result<DeviceAuthStart, String> {
+pub async fn start_wechat_cli_bind(data_dir: tauri::State<'_, crate::AppState>, module_id: Option<String>) -> Result<DeviceAuthStart, String> {
     let dd = data_dir.inner().get_data_dir();
-    tracing::info!("[pf] start_wechat_cli_bind: dd={}", dd);
+    let mid = module_id.unwrap_or_else(|| "openclaw".to_string());
+    tracing::info!("[pf] start_wechat_cli_bind: dd={} module={}", dd, mid);
     // 先清旧状态
     if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = None; }
 
@@ -262,7 +263,7 @@ pub async fn start_wechat_cli_bind(data_dir: tauri::State<'_, crate::AppState>) 
             if let Ok(Some(qr_url)) = cli_res {
                 let t = qr_url.split("qrcode=").nth(1).and_then(|s| s.split('&').next()).unwrap_or("").to_string();
                 if !t.is_empty() {
-                    if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = Some((t.clone(), dd.clone())); }
+                    if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = Some((t.clone(), dd.clone(), mid.clone())); }
                     return Ok(DeviceAuthStart { success: true, qr_image_base64: generate_qr_base64(&qr_url)?, device_code: t, expires_in: 120, interval_ms: 2000, error: None });
                 }
             }
@@ -276,7 +277,7 @@ pub async fn start_wechat_cli_bind(data_dir: tauri::State<'_, crate::AppState>) 
 
     match result {
         Some((url, tk)) => {
-            if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = Some((tk.clone(), dd.clone())); }
+            if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = Some((tk.clone(), dd.clone(), mid.clone())); }
             Ok(DeviceAuthStart { success: true, qr_image_base64: generate_qr_base64(&url)?, device_code: tk, expires_in: 120, interval_ms: 2000, error: None })
         }
         None => Ok(DeviceAuthStart { success: false, qr_image_base64: String::new(), device_code: String::new(), expires_in: 0, interval_ms: 2000, error: Some("无法获取二维码，请检查网络后重试".into()) }),
@@ -286,7 +287,7 @@ pub async fn start_wechat_cli_bind(data_dir: tauri::State<'_, crate::AppState>) 
 /// 前端轮询：异步查询微信扫码状态
 #[tauri::command]
 pub async fn poll_wechat_cli_bind() -> Result<QrCodeAuthResult, String> {
-    let (token, dd) = {
+    let (token, dd, module_id) = {
         let g = ACTIVE_WECHAT_QR.lock().map_err(|e| format!("锁失败: {}", e))?;
         match g.as_ref() {
             Some(v) => v.clone(),
@@ -306,7 +307,7 @@ pub async fn poll_wechat_cli_bind() -> Result<QrCodeAuthResult, String> {
                 tracing::info!("[pf] poll_wechat: ret={} status={}", ret, st);
                 if ret == 0 && st == "confirmed" {
                     if let Some(bt) = d.get("bot_token").and_then(|v|v.as_str()) {
-                        let _ = save_wechat_bot_token_inner(&dd, bt).await;
+                        let _ = save_wechat_bot_token_inner(&dd, bt, &module_id).await;
                         if let Ok(mut g) = ACTIVE_WECHAT_QR.lock() { *g = None; }
                     }
                     return Ok(QrCodeAuthResult{status:"confirmed".into(),bot_token:d.get("bot_token").and_then(|v|v.as_str()).map(|s|s.to_string()),ilink_bot_id:None,error:None});
@@ -381,7 +382,7 @@ async fn poll_wechat_scan_bg(data_dir: &str, qrcode: &str) {
                 let st = d.get("status").and_then(|v|v.as_str()).unwrap_or("");
                 tracing::info!("[pf] poll[{}/90]: ret={} status={}", i+1, ret, st);
                 if ret == 0 && st == "confirmed" {
-                    if let Some(bt) = d.get("bot_token").and_then(|v|v.as_str()) { let _ = save_wechat_bot_token_inner(data_dir, bt).await; }
+                    if let Some(bt) = d.get("bot_token").and_then(|v|v.as_str()) { let _ = save_wechat_bot_token_inner(data_dir, bt, "openclaw").await; }
                     break;
                 }
                 if st == "expired" || st == "denied" { break; }
@@ -392,10 +393,10 @@ async fn poll_wechat_scan_bg(data_dir: &str, qrcode: &str) {
 }
 
 /// 写入 bot_token 到 instances.yaml + openclaw.json
-pub async fn save_wechat_bot_token_inner(data_dir: &str, bot_token: &str) -> Result<(), String> {
+pub async fn save_wechat_bot_token_inner(data_dir: &str, bot_token: &str, module_id: &str) -> Result<(), String> {
     let token = bot_token.trim();
     if token.is_empty() { return Err("token为空".into()); }
-    tracing::info!("[pf] save_wechat_bot_token: dd={} token={}..", data_dir, &token[..std::cmp::min(20,token.len())]);
+    tracing::info!("[pf] save_wechat_bot_token: dd={} module={} token={}..", data_dir, module_id, &token[..std::cmp::min(20,token.len())]);
 
     let inst_path = PathBuf::from(data_dir).join("config").join("instances.yaml");
     if inst_path.exists() {
@@ -415,60 +416,128 @@ pub async fn save_wechat_bot_token_inner(data_dir: &str, bot_token: &str) -> Res
             }
         }
     }
-    let oc_path = PathBuf::from(data_dir).join("openclaw-cn").join("openclaw.json");
-    if oc_path.exists() {
-        let content = tokio::fs::read_to_string(&oc_path).await.map_err(|e| format!("读取:{}",e))?;
-        let mut gw: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("解析:{}",e))?;
-        if let Some(ch) = gw.get_mut("channels").and_then(|c|c.as_object_mut()) {
-            if let Some(wx) = ch.get_mut("openclaw-weixin").and_then(|c|c.as_object_mut()) {
-                wx.insert("botToken".into(), serde_json::json!(token));
-                if let Some(accts) = wx.get_mut("accounts").and_then(|a|a.as_object_mut()) {
-                    for a in accts.values_mut() { if let Some(o) = a.as_object_mut() { o.insert("botToken".into(), serde_json::json!(token)); } }
+    // OpenClaw 专用：写入 openclaw.json + 插件凭证文件
+    if module_id == "openclaw" {
+        let oc_path = PathBuf::from(data_dir).join("openclaw").join("openclaw.json");
+        if oc_path.exists() {
+            let content = tokio::fs::read_to_string(&oc_path).await.map_err(|e| format!("读取:{}",e))?;
+            let mut gw: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("解析:{}",e))?;
+            if let Some(ch) = gw.get_mut("channels").and_then(|c|c.as_object_mut()) {
+                if let Some(wx) = ch.get_mut("openclaw-weixin").and_then(|c|c.as_object_mut()) {
+                    wx.insert("botToken".into(), serde_json::json!(token));
+                    if let Some(accts) = wx.get_mut("accounts").and_then(|a|a.as_object_mut()) {
+                        for a in accts.values_mut() { if let Some(o) = a.as_object_mut() { o.insert("botToken".into(), serde_json::json!(token)); } }
+                    }
+                }
+            }
+            tokio::fs::write(&oc_path, serde_json::to_string_pretty(&gw).unwrap_or_default()).await.map_err(|e| format!("写入:{}",e))?;
+        }
+        // 写入 wechat 插件需要的 credentials 文件
+        let cred_dir = PathBuf::from(data_dir).join("openclaw").join("openclaw-weixin");
+        let accounts_dir = cred_dir.join("accounts");
+        tokio::fs::create_dir_all(&accounts_dir).await.map_err(|e| format!("创建凭证目录:{}", e))?;
+        let index_file = cred_dir.join("accounts.json");
+        let index_json = serde_json::json!(["default"]);
+        tokio::fs::write(&index_file, serde_json::to_string(&index_json).unwrap_or_default()).await.map_err(|e| format!("写入账户索引:{}", e))?;
+        let acct_file = accounts_dir.join("default.json");
+        let acct_json = serde_json::json!({"token": token});
+        tokio::fs::write(&acct_file, serde_json::to_string(&acct_json).unwrap_or_default()).await.map_err(|e| format!("写入账户凭证:{}", e))?;
+        let cred_file = cred_dir.join("credentials.json");
+        let cred_json = serde_json::json!({"token": token});
+        tokio::fs::write(&cred_file, serde_json::to_string(&cred_json).unwrap_or_default()).await.map_err(|e| format!("写入凭证文件:{}", e))?;
+        tracing::info!("[pf] wechat credentials written to {}", cred_file.display());
+
+        // 后台异步重启网关
+        let dd = data_dir.to_string();
+        tokio::spawn(async move {
+            let _ = crate::commands::gateway::restart_gateway_if_running_for_wechat_config(&dd).await;
+        });
+    }
+
+    // Hermes 专用：写环境变量到 .env，同时写 OpenClaw weixin 凭证（复用已验证的插件）
+    if module_id == "hermes" {
+        // 1. Write to Hermes .env
+        let hermes_dir = PathBuf::from(data_dir).join("modules").join("hermes");
+        tokio::fs::create_dir_all(&hermes_dir).await.ok();
+        let env_path = hermes_dir.join(".env");
+        let mut env_content = tokio::fs::read_to_string(&env_path).await.unwrap_or_default();
+        let updates = [("WEIXIN_TOKEN", token.to_string())];
+        for (key, val) in &updates {
+            if let Some(line_start) = env_content.find(&format!("{}=", key)) {
+                let line_end = env_content[line_start..].find('\n').map(|i| line_start + i).unwrap_or(env_content.len());
+                env_content.replace_range(line_start..line_end, &format!("{}={}", key, val));
+            } else {
+                if !env_content.is_empty() && !env_content.ends_with('\n') { env_content.push('\n'); }
+                env_content.push_str(&format!("{}={}\n", key, val));
+            }
+        }
+        tokio::fs::write(&env_path, &env_content).await
+            .map_err(|e| tracing::warn!("[pf] Hermes .env write failed: {}", e)).ok();
+        tracing::info!("[pf] hermes wechat env vars written to {}", env_path.display());
+
+        // 2. Also write OpenClaw weixin plugin credentials
+        //    The OpenClaw @tencent-weixin/openclaw-weixin npm plugin handles iLink session
+        //    management reliably. By sharing credentials, Hermes instances get WeChat
+        //    connectivity through the proven OpenClaw plugin path.
+        let oc_weixin_dir = PathBuf::from(data_dir).join("openclaw").join("openclaw-weixin");
+        let accounts_dir = oc_weixin_dir.join("accounts");
+        tokio::fs::create_dir_all(&accounts_dir).await.map_err(|e| tracing::warn!("[pf] OpenClaw weixin dir create failed: {}", e)).ok();
+        if accounts_dir.exists() {
+            // Write account index
+            tokio::fs::write(
+                oc_weixin_dir.join("accounts.json"),
+                serde_json::to_string(&serde_json::json!(["default"])).unwrap_or_default(),
+            ).await.map_err(|e| tracing::warn!("[pf] weixin accounts.json write failed: {}", e)).ok();
+            // Write per-account token
+            tokio::fs::write(
+                accounts_dir.join("default.json"),
+                serde_json::to_string(&serde_json::json!({"token": token})).unwrap_or_default(),
+            ).await.map_err(|e| tracing::warn!("[pf] weixin account token write failed: {}", e)).ok();
+            // Write legacy credentials.json
+            tokio::fs::write(
+                oc_weixin_dir.join("credentials.json"),
+                serde_json::to_string(&serde_json::json!({"token": token})).unwrap_or_default(),
+            ).await.map_err(|e| tracing::warn!("[pf] weixin credentials.json write failed: {}", e)).ok();
+            tracing::info!("[pf] hermes wechat token also written to OpenClaw weixin plugin dir");
+        }
+
+        // 3. Also write to openclaw.json channels.weixin section for gateway
+        let oc_json_path = PathBuf::from(data_dir).join("openclaw").join("openclaw.json");
+        if oc_json_path.exists() {
+            if let Ok(content) = tokio::fs::read_to_string(&oc_json_path).await {
+                if let Ok(mut gw) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(ch) = gw.get_mut("channels").and_then(|c| c.as_object_mut()) {
+                        if !ch.contains_key("openclaw-weixin") {
+                            ch.insert("openclaw-weixin".into(), serde_json::json!({"enabled": true, "botToken": token}));
+                        } else if let Some(wx) = ch.get_mut("openclaw-weixin").and_then(|c| c.as_object_mut()) {
+                            wx.insert("enabled".into(), serde_json::json!(true));
+                            wx.insert("botToken".into(), serde_json::json!(token));
+                        }
+                    }
+                    if let Ok(pretty) = serde_json::to_string_pretty(&gw) {
+                        let _ = tokio::fs::write(&oc_json_path, pretty).await;
+                        tracing::info!("[pf] hermes wechat token synced to openclaw.json");
+                    }
                 }
             }
         }
-        tokio::fs::write(&oc_path, serde_json::to_string_pretty(&gw).unwrap_or_default()).await.map_err(|e| format!("写入:{}",e))?;
-    }
-    // 写入 wechat 插件需要的 credentials 文件
-    // 插件 resolveStateDir() → OPENCLAW_STATE_DIR → 然后 join("openclaw-weixin")
-    // 所以路径是: {stateDir}/openclaw-weixin/ (NOT credentials/openclaw-weixin/)
-    let cred_dir = PathBuf::from(data_dir)
-        .join("openclaw-cn")
-        .join("openclaw-weixin");
-    let accounts_dir = cred_dir.join("accounts");
-    tokio::fs::create_dir_all(&accounts_dir).await.map_err(|e| format!("创建凭证目录:{}", e))?;
-    // 写入 account index (accounts.json)
-    let index_file = cred_dir.join("accounts.json");
-    let index_json = serde_json::json!(["default"]);
-    tokio::fs::write(&index_file, serde_json::to_string(&index_json).unwrap_or_default())
-        .await
-        .map_err(|e| format!("写入账户索引:{}", e))?;
-    // 写入 per-account token (accounts/default.json)
-    let acct_file = accounts_dir.join("default.json");
-    let acct_json = serde_json::json!({"token": token});
-    tokio::fs::write(&acct_file, serde_json::to_string(&acct_json).unwrap_or_default())
-        .await
-        .map_err(|e| format!("写入账户凭证:{}", e))?;
-    // 写入 legacy 单文件 token (credentials.json) 兼容旧版
-    let cred_file = cred_dir.join("credentials.json");
-    let cred_json = serde_json::json!({"token": token});
-    tokio::fs::write(&cred_file, serde_json::to_string(&cred_json).unwrap_or_default())
-        .await
-        .map_err(|e| format!("写入凭证文件:{}", e))?;
-    tracing::info!("[pf] wechat credentials written to {}", cred_file.display());
 
-    // 后台异步重启网关，不阻塞前端 UI 响应
-    let dd = data_dir.to_string();
-    tokio::spawn(async move {
-        let _ = crate::commands::gateway::restart_gateway_if_running_for_wechat_config(&dd).await;
-    });
+        let _ = crate::commands::module::sync_module_configuration("hermes", data_dir).await;
+
+        // Restart OpenClaw gateway if running (so it picks up the new weixin config)
+        let dd = data_dir.to_string();
+        tokio::spawn(async move {
+            let _ = crate::commands::gateway::restart_gateway_if_running_for_wechat_config(&dd).await;
+        });
+    }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn save_wechat_bot_token(data_dir: tauri::State<'_, crate::AppState>, bot_token: String) -> Result<String, String> {
+pub async fn save_wechat_bot_token(data_dir: tauri::State<'_, crate::AppState>, bot_token: String, module_id: Option<String>) -> Result<String, String> {
     let dd = data_dir.inner().get_data_dir();
-    save_wechat_bot_token_inner(&dd, &bot_token).await?;
+    let mid = module_id.unwrap_or_else(|| "openclaw".to_string());
+    save_wechat_bot_token_inner(&dd, &bot_token, &mid).await?;
     Ok("微信 bot_token 已写入配置文件".into())
 }
 
@@ -485,16 +554,18 @@ pub async fn uninstall_plugin_fw(data_dir: tauri::State<'_, crate::AppState>, pl
 // ============================================================
 // 飞书 Device Authorization Grant (RFC 8628) 快捷绑定
 // ============================================================
-static ACTIVE_FEISHU_QR: Mutex<Option<(String, String)>> = Mutex::new(None);
+static ACTIVE_FEISHU_QR: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 
 /// 飞书快捷绑定 — 启动设备注册流程，返回 QR 码
 /// 使用飞书 OAuth Device Registration 端点: POST /oauth/v1/app/registration
 #[tauri::command]
 pub async fn start_feishu_quick_bind(
     data_dir: tauri::State<'_, crate::AppState>,
+    module_id: Option<String>,
 ) -> Result<DeviceAuthStart, String> {
     let dd = data_dir.inner().get_data_dir();
-    tracing::info!("[pf] start_feishu_quick_bind: dd={}", dd);
+    let mid = module_id.unwrap_or_else(|| "openclaw".to_string());
+    tracing::info!("[pf] start_feishu_quick_bind: dd={} module={}", dd, mid);
     if let Ok(mut g) = ACTIVE_FEISHU_QR.lock() { *g = None; }
 
     let client = reqwest::Client::builder()
@@ -563,7 +634,7 @@ pub async fn start_feishu_quick_bind(
     let b64 = generate_qr_base64(&verification_uri)?;
 
     if let Ok(mut g) = ACTIVE_FEISHU_QR.lock() {
-        *g = Some((device_code.clone(), dd.clone()));
+        *g = Some((device_code.clone(), dd.clone(), mid.clone()));
     }
 
     Ok(DeviceAuthStart {
@@ -581,7 +652,7 @@ pub async fn start_feishu_quick_bind(
 pub async fn poll_feishu_quick_bind(
     device_code: String,
 ) -> Result<DeviceAuthResult, String> {
-    let (stored_code, dd) = {
+    let (stored_code, dd, module_id) = {
         let g = ACTIVE_FEISHU_QR.lock().map_err(|e| format!("锁:{}", e))?;
         match g.as_ref() {
             Some(v) => v.clone(),
@@ -638,8 +709,8 @@ pub async fn poll_feishu_quick_bind(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        // 保存凭证到配置文件
-        let _ = save_feishu_credentials_inner(&dd, &app_id, &app_secret, user_open_id.as_deref()).await;
+        // 保存凭证到配置文件（按模块写入对应配置）
+        let _ = save_feishu_credentials_inner(&dd, &app_id, &app_secret, user_open_id.as_deref(), &module_id).await;
 
         if let Ok(mut g) = ACTIVE_FEISHU_QR.lock() { *g = None; }
 
@@ -714,8 +785,9 @@ async fn save_feishu_credentials_inner(
     app_id: &str,
     app_secret: &str,
     user_open_id: Option<&str>,
+    module_id: &str,
 ) -> Result<(), String> {
-    tracing::info!("[pf] save_feishu_creds: dd={} app_id={} open_id={:?}", data_dir, app_id, user_open_id);
+    tracing::info!("[pf] save_feishu_creds: dd={} app_id={} module={} open_id={:?}", data_dir, app_id, module_id, user_open_id);
 
     // 写入 instances.yaml
     let inst_path = PathBuf::from(data_dir).join("config").join("instances.yaml");
@@ -779,8 +851,9 @@ async fn save_feishu_credentials_inner(
         }
     }
 
-    // 写入 openclaw.json（每个实例独立 account 条目，不覆盖已有实例的凭证）
-    let oc_path = PathBuf::from(data_dir).join("openclaw-cn").join("openclaw.json");
+    // 写入 openclaw.json（仅 OpenClaw 模块）
+    if module_id == "openclaw" {
+    let oc_path = PathBuf::from(data_dir).join("openclaw").join("openclaw.json");
     if oc_path.exists() {
         let content = tokio::fs::read_to_string(&oc_path).await.map_err(|e| format!("读取:{}", e))?;
         let mut gw: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("解析:{}", e))?;
@@ -831,9 +904,9 @@ async fn save_feishu_credentials_inner(
                         // 无已有实例 → 存全局兜底
                         fs.insert("appId".into(), serde_json::json!(app_id));
                         fs.insert("appSecret".into(), serde_json::json!(app_secret));
-                        if let Some(oid) = user_open_id.filter(|s| !s.is_empty()) {
-                            fs.insert("allowFrom".into(), serde_json::json!(vec![oid]));
-                        }
+                        // 扫码绑定后默认开放所有用户（避免手动配对码），用户可事后在飞书开放平台限制
+                        fs.insert("allowFrom".into(), serde_json::json!(vec!["*"]));
+                        fs.insert("dmPolicy".into(), serde_json::json!("open"));
                     }
                     // 无论全局如何，都创建独立 pending account 条目
                     if let Some(accts) = fs.get_mut("accounts").and_then(|a| a.as_object_mut()) {
@@ -842,9 +915,8 @@ async fn save_feishu_credentials_inner(
                             let mut entry = serde_json::Map::new();
                             entry.insert("appId".into(), serde_json::json!(app_id));
                             entry.insert("appSecret".into(), serde_json::json!(app_secret));
-                            if let Some(oid) = user_open_id.filter(|s| !s.is_empty()) {
-                                entry.insert("allowFrom".into(), serde_json::json!(vec![oid]));
-                            }
+                            entry.insert("allowFrom".into(), serde_json::json!(vec!["*"]));
+                            entry.insert("dmPolicy".into(), serde_json::json!("open"));
                             accts.insert(pending_key, serde_json::json!(entry));
                         }
                     }
@@ -855,8 +927,54 @@ async fn save_feishu_credentials_inner(
             .await
             .map_err(|e| format!("写入:{}", e))?;
     }
+    } // end openclaw-specific block
 
-    // 若网关运行中则重启
-    let _ = crate::commands::gateway::restart_gateway_if_running_for_wechat_config(data_dir).await;
+    // Hermes: 写环境变量到 .env（Hermes 通过环境变量读取渠道凭证）
+    if module_id == "hermes" {
+        let hermes_dir = PathBuf::from(data_dir).join("modules").join("hermes");
+        tokio::fs::create_dir_all(&hermes_dir).await.ok();
+        let env_path = hermes_dir.join(".env");
+        let mut env_content = tokio::fs::read_to_string(&env_path).await.unwrap_or_default();
+        // 追加/更新飞书环境变量
+        let updates = [
+            ("FEISHU_APP_ID", app_id.to_string()),
+            ("FEISHU_APP_SECRET", app_secret.to_string()),
+        ];
+        for (key, val) in &updates {
+            if let Some(line_start) = env_content.find(&format!("{}=", key)) {
+                // 替换已有行
+                let line_end = env_content[line_start..].find('\n').map(|i| line_start + i).unwrap_or(env_content.len());
+                env_content.replace_range(line_start..line_end, &format!("{}={}", key, val));
+            } else {
+                // 追加新行
+                if !env_content.is_empty() && !env_content.ends_with('\n') {
+                    env_content.push('\n');
+                }
+                env_content.push_str(&format!("{}={}\n", key, val));
+            }
+        }
+        // 如果有白名单 open_id，也写入
+        if let Some(oid) = user_open_id.filter(|s| !s.is_empty()) {
+            let key = "FEISHU_ALLOWED_USERS";
+            if let Some(line_start) = env_content.find(&format!("{}=", key)) {
+                let line_end = env_content[line_start..].find('\n').map(|i| line_start + i).unwrap_or(env_content.len());
+                env_content.replace_range(line_start..line_end, &format!("{}={}", key, oid));
+            } else {
+                if !env_content.is_empty() && !env_content.ends_with('\n') { env_content.push('\n'); }
+                env_content.push_str(&format!("{}={}\n", key, oid));
+            }
+        }
+        tokio::fs::write(&env_path, &env_content).await
+            .map_err(|e| tracing::warn!("[pf] Hermes .env write failed: {}", e)).ok();
+        tracing::info!("[pf] hermes feishu env vars written to {}", env_path.display());
+
+        // 同步 Hermes 模块配置
+        let _ = crate::commands::module::sync_module_configuration("hermes", data_dir).await;
+    }
+
+    // 若 OpenClaw 网关运行中则重启
+    if module_id == "openclaw" {
+        let _ = crate::commands::gateway::restart_gateway_if_running_for_wechat_config(data_dir).await;
+    }
     Ok(())
 }

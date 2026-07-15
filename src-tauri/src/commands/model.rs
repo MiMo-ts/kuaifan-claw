@@ -709,6 +709,125 @@ fn yaml_id_alias(id: &str) -> Option<&'static str> {
 
 
 
+#[cfg(test)]
+mod plaintext_credential_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_api_keys_as_plaintext_for_shared_module_config() {
+        assert_eq!(api_key_for_shared_model_config("  sk-example  "), "sk-example");
+    }
+
+    #[test]
+    fn migrates_legacy_encrypted_api_keys_to_plaintext() {
+        let key = [7u8; 32];
+        let encrypted = crate::services::cipher::encrypt_credential("sk-legacy", &key);
+        let content = format!("providers:\n  kuaifan:\n    api_key: \"{}\"\n", encrypted);
+
+        let migrated = migrate_encrypted_provider_api_keys_to_plaintext(&content, &key).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&migrated).unwrap();
+
+        assert_eq!(
+            parsed["providers"]["kuaifan"]["api_key"].as_str(),
+            Some("sk-legacy")
+        );
+        assert!(!migrated.contains(CIPHER_PREFIX));
+    }
+}
+
+fn api_key_for_shared_model_config(api_key: &str) -> String {
+    api_key.trim().to_string()
+}
+
+fn yaml_double_quoted_scalar(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+    )
+}
+
+fn has_legacy_encrypted_api_key(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed
+            .strip_prefix("api_key:")
+            .map(|value| value.trim().trim_matches(['\"', '\'']).starts_with(CIPHER_PREFIX))
+            .unwrap_or(false)
+    })
+}
+
+fn migrate_encrypted_provider_api_keys_to_plaintext(
+    content: &str,
+    key: &[u8; 32],
+) -> Result<String, String> {
+    let mut changed = false;
+    let migrated = content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let Some(value) = trimmed.strip_prefix("api_key:") else {
+                return Ok(line.to_string());
+            };
+
+            let encrypted = value.trim().trim_matches(['\"', '\'']);
+            if !encrypted.starts_with(CIPHER_PREFIX) {
+                return Ok(line.to_string());
+            }
+
+            let plain = crate::services::cipher::decrypt_credential(encrypted, key)
+                .ok_or_else(|| "无法解密历史 API Key，已取消保存以避免保留加密值".to_string())?;
+            changed = true;
+            let indent = &line[..line.len() - trimmed.len()];
+            Ok(format!("{}api_key: {}", indent, yaml_double_quoted_scalar(&plain)))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    if changed {
+        Ok(migrated.join("\n"))
+    } else {
+        Ok(content.to_string())
+    }
+}
+
+fn migrate_models_yaml_api_keys_to_plaintext(data_dir: &str, content: &str) -> Result<String, String> {
+    if !has_legacy_encrypted_api_key(content) {
+        return Ok(content.to_string());
+    }
+
+    let key = crate::services::cipher::get_or_create_cipher_key_sync(data_dir)
+        .map_err(|error| format!("无法读取历史 API Key 的迁移密钥: {}", error))?;
+    migrate_encrypted_provider_api_keys_to_plaintext(content, &key)
+}
+
+pub(crate) async fn ensure_models_yaml_api_keys_are_plaintext(data_dir: &str) -> Result<(), String> {
+    let config_path = PathBuf::from(data_dir).join("config").join("models.yaml");
+    let content = read_models_yaml_text_for_manager(data_dir)?;
+    let migrated = migrate_models_yaml_api_keys_to_plaintext(data_dir, &content)?;
+
+    if migrated == content {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&config_path)
+        .await
+        .map_err(|error| format!("打开 models.yaml 迁移明文 API Key 失败: {}", error))?;
+    file.write_all(migrated.as_bytes())
+        .await
+        .map_err(|error| format!("写入迁移后的 models.yaml 失败: {}", error))?;
+    file.sync_all()
+        .await
+        .map_err(|error| format!("同步迁移后的 models.yaml 失败: {}", error))?;
+
+    Ok(())
+}
+
 fn upsert_provider_api_key(content: &str, provider_id: &str, api_key: &str) -> String {
 
     let target_header = format!("{}:", provider_id);
@@ -813,7 +932,7 @@ fn upsert_provider_api_key(content: &str, provider_id: &str, api_key: &str) -> S
 
 
 
-    let api_key_line_inside = format!("    api_key: \"{}\"", api_key);
+    let api_key_line_inside = format!("    api_key: {}", yaml_double_quoted_scalar(api_key));
 
 
 
@@ -1301,37 +1420,9 @@ pub async fn save_provider_config(
 
 
 
-    // 新凭据直接加密后写入（而非明文）
-
-    let encrypted_api_key = tokio::task::spawn_blocking({
-
-        let data_dir_clone = data_dir.clone();
-
-        let api_key_clone = api_key.clone();
-
-        move || {
-
-            let key = crate::services::cipher::get_or_create_cipher_key_sync(&data_dir_clone)
-
-                .map_err(|e| format!("Failed to get encryption key: {}", e))?;
-
-            Ok::<_, String>(crate::services::cipher::encrypt_credential(&api_key_clone, &key))
-
-        }
-
-    })
-
-    .await
-
-    .map_err(|e| format!("Key task failed: {}", e))?
-
-    .map_err(|e| e)?;
-
-
-
-    // 先更新 api_key
-
-    let new_content = upsert_provider_api_key(&content, &provider_id, &encrypted_api_key);
+    // 统一模型配置是 OpenClaw 与 Hermes 的共享数据源，API Key 按用户要求以明文保存。
+    let api_key = api_key_for_shared_model_config(&api_key);
+    let new_content = upsert_provider_api_key(&content, &provider_id, &api_key);
 
 
 
@@ -1361,6 +1452,8 @@ pub async fn save_provider_config(
 
 
 
+    let final_content = migrate_models_yaml_api_keys_to_plaintext(&data_dir, &final_content)?;
+
     // Write with sync_all to avoid data loss
 
     let mut f = OpenOptions::new()
@@ -1388,6 +1481,13 @@ pub async fn save_provider_config(
         .await
 
         .map_err(|e| format!("Failed to sync config: {}", e))?;
+
+
+    crate::commands::module::sync_all_module_configurations(&data_dir)
+
+        .await
+
+        .map_err(|e| format!("同步模块配置失败: {}", e))?;
 
 
 
@@ -2943,13 +3043,13 @@ pub async fn set_default_model(
 
 
 
-    // models.yaml 已更新，立即将默认模型同步到 openclaw.json（修复：保存后必须同步，否则网关永远用默认 Claude）
+    // models.yaml 已更新，将统一模型配置投影到已启用的模块运行时配置。
 
-    crate::commands::gateway::sync_openclaw_config_from_manager(&data_dir)
+    crate::commands::module::sync_all_module_configurations(&data_dir)
 
         .await
 
-        .map_err(|e| format!("同步网关配置失败: {}", e))?;
+        .map_err(|e| format!("同步模块配置失败: {}", e))?;
 
 
 

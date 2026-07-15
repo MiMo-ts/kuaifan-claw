@@ -1,6 +1,6 @@
 ﻿// 插件管理命令
 
-use crate::bundled_env::resolve_bundled_plugin_tgz;
+use crate::bundled_env::{resolve_bundled_plugin_tgz, OPENCLAW_DATA_DIR_NAME};
 use crate::commands::hidden_cmd;
 use crate::env_paths::resolve_node;
 use crate::mirror::{unpack_npm_tarball, InstallProgressEvent};
@@ -55,9 +55,9 @@ fn resolve_npm_registry(data_base: &str) -> String {
         .or(yaml_reg)
         .unwrap_or_else(|| {
             tracing::warn!(
-                "npm registry 配置无效（环境变量或 app.yaml），回退使用 https://registry.npmmirror.com"
+                "npm registry 配置无效（环境变量或 app.yaml），回退使用 https://registry.npmjs.org"
             );
-            "https://registry.npmmirror.com".to_string()
+            "https://registry.npmjs.org".to_string()
         })
 }
 
@@ -267,14 +267,14 @@ fn plugin_package_json_deps_installed(plugin_dir: &Path) -> bool {
     true
 }
 
-/// QQ 插件就绪判定：
-/// 1) OpenClaw 包装包 `@openclaw-cn/qqbot`：`npm install` 会把 `@sliverp/qqbot` 装进 `node_modules/@sliverp/qqbot`。
-/// 2) 内置/离线 tgz 若直接是官方包根目录（`package.json` 的 `name` 为 `@sliverp/qqbot`），npm 不会把包自身再装入
-///    `node_modules/@sliverp/qqbot`；此时 `install_plugin_deps_blocking` 会因 spec 与包名相同而跳过定向安装，
+/// QQ 插件就绪判定：官方 `@openclaw/qqbot` 可作为插件根目录或安装在 node_modules。
 ///    仅执行普通 `npm install` 拉取顶层依赖。若仍只用 (1) 的路径检测会误判为「依赖缺失」。
 fn qq_channel_runtime_ready(plugin_dir: &Path) -> bool {
     let nm = plugin_dir.join("node_modules");
-    if nm.is_dir() && nm.join("@sliverp").join("qqbot").is_dir() {
+    if nm.is_dir()
+        && (nm.join("@openclaw").join("qqbot").is_dir()
+            || nm.join("@sliverp").join("qqbot").is_dir())
+    {
         return true;
     }
     let pkg_path = plugin_dir.join("package.json");
@@ -285,7 +285,7 @@ fn qq_channel_runtime_ready(plugin_dir: &Path) -> bool {
         return false;
     };
     let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
-    if name != "@sliverp/qqbot" {
+    if name != "@openclaw/qqbot" && name != "@sliverp/qqbot" {
         return false;
     }
     if !plugin_dir.join("dist").join("index.js").is_file() {
@@ -317,7 +317,7 @@ fn channel_plugin_runtime_ready(plugin_dir: &Path, plugin_id: &str) -> bool {
     }
 }
 
-/// 启动网关前：根据已启用实例自动从 `openclaw-cn/extensions` 复制、装依赖、编译 TS，补全缺失的通道插件。
+/// 启动网关前：根据已启用实例准备官方通道插件并同步其加载路径。
 /// 不弹 UI；失败仅打日志，避免阻塞已配置好的网关启动。
 pub(crate) async fn ensure_plugins_for_enabled_instances(data_dir: &str) {
     let inst_path = PathBuf::from(data_dir)
@@ -430,7 +430,7 @@ fn ensure_one_channel_plugin_blocking(data_dir: &str, plugin_id: &str) -> Result
         return Ok(());
     };
     let bundled_src = PathBuf::from(data_dir)
-        .join("openclaw-cn")
+        .join(OPENCLAW_DATA_DIR_NAME)
         .join("extensions")
         .join(ext_folder);
     let dest = PathBuf::from(data_dir).join("plugins").join(plugin_id);
@@ -471,10 +471,9 @@ fn ensure_one_channel_plugin_blocking(data_dir: &str, plugin_id: &str) -> Result
             }
         }
     } else if !dest.is_dir() {
-        let need_npm_fallback = !bundled_src.is_dir()
-            && (plugin_id == "wecom" || plugin_id == "wxwork");
+        let need_npm_fallback = !bundled_src.is_dir();
         if need_npm_fallback {
-            // 企业微信插件：extensions/wecom-connector 不在内置 openclaw-cn 中，直接从 npm 下载
+            // Official OpenClaw keeps these channel extensions in their npm packages.
             match npm_pack_unpack_blocking(data_dir, npm_name, &dest) {
                 Ok(()) => {}
                 Err(e) => {
@@ -486,7 +485,7 @@ fn ensure_one_channel_plugin_blocking(data_dir: &str, plugin_id: &str) -> Result
             }
         } else if !bundled_src.is_dir() {
             return Err(format!(
-                "本地无 openclaw-cn/extensions/{}，请先在插件页安装「{}」",
+                "本地无 OpenClaw extensions/{}，请先在插件页安装「{}」",
                 ext_folder, plugin_id
             ));
         } else {
@@ -512,7 +511,7 @@ fn ensure_one_channel_plugin_blocking(data_dir: &str, plugin_id: &str) -> Result
 
 pub async fn sync_plugins_load_paths(data_dir: &str) -> Result<(), String> {
     let openclaw_json_path = PathBuf::from(data_dir)
-        .join("openclaw-cn")
+        .join(OPENCLAW_DATA_DIR_NAME)
         .join("openclaw.json");
 
     let base: serde_json::Value = if openclaw_json_path.exists() {
@@ -1045,13 +1044,13 @@ fn install_plugin_deps_blocking(
 /// - `qq`：定向依赖为社区包 `@sliverp/qqbot`（与 stub 的 `openclaw.install.npmSpec` 一致），`@openclaw-cn/qqbot` 可能未同步到镜像。
 fn plugin_extension_and_npm_name(plugin_id: &str) -> Option<(&'static str, &'static str)> {
     match plugin_id {
-        "feishu" => Some(("feishu", "@openclaw-cn/feishu")),
+        "feishu" => Some(("feishu", "@openclaw/feishu")),
         "wxwork" | "wecom" => Some((
             "wecom-connector",
             "@wecom/wecom-openclaw-plugin",
         )),
         "wechat_clawbot" => Some(("openclaw-weixin", "@tencent-weixin/openclaw-weixin@1.0.3")),
-        "qq" => Some(("qqbot", "@sliverp/qqbot")),
+        "qq" => Some(("qqbot", "@openclaw/qqbot")),
         _ => None,
     }
 }
@@ -1255,14 +1254,14 @@ fn npm_pack_unpack_blocking(
 fn find_tsc_exe(data_base: &str) -> (PathBuf, String) {
     // 1. 优先：openclaw-cn 主程序的 tsc
     let openclaw_tsc = PathBuf::from(data_base)
-        .join("openclaw-cn")
+        .join(OPENCLAW_DATA_DIR_NAME)
         .join("node_modules")
         .join(".bin")
         .join(if cfg!(windows) { "tsc.cmd" } else { "tsc" });
     if openclaw_tsc.is_file() {
         return (
             openclaw_tsc,
-            "openclaw-cn/node_modules/.bin/tsc".to_string(),
+            "openclaw/node_modules/.bin/tsc".to_string(),
         );
     }
 
@@ -1487,20 +1486,21 @@ pub async fn check_plugin_installed(
         }
     }
 
+    // feishu 是 OpenClaw 内置通道，无需安装
+    if plugin_id == "feishu" {
+        return Ok(true);
+    }
+
     // 回退检查：built-in 扩展（extensions/ 目录下有编译好的 dist/）
     if let Some((ext_folder, _)) = plugin_extension_and_npm_name(&plugin_id) {
         let ext_path = PathBuf::from(&data_dir)
-            .join("openclaw-cn")
+            .join(OPENCLAW_DATA_DIR_NAME)
             .join("extensions")
             .join(ext_folder);
         if ext_path.join("dist").join("index.js").is_file()
             || ext_path.join("dist").is_dir()
         {
-            // 飞书等内置扩展：有 dist 即视为可用
-            if plugin_id == "feishu" {
-                return Ok(true);
-            }
-            // 钉钉/企微：需检查 node_modules 依赖
+            // 内置扩展：有 dist 即视为可用
             if ext_path.join("node_modules").is_dir() {
                 return Ok(true);
             }
@@ -1735,7 +1735,7 @@ pub async fn install_plugin(
     };
 
     let bundled_src = PathBuf::from(&data_dir)
-        .join("openclaw-cn")
+        .join(OPENCLAW_DATA_DIR_NAME)
         .join("extensions")
         .join(ext_folder);
     let dest = PathBuf::from(&plugin_path);

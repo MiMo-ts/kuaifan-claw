@@ -1,0 +1,8 @@
+id: wechat_clawbot
+name: 微信 ClawBot
+description: 微信个人号机器人通道
+version: "1.0.0"
+kind: channel
+install:
+  command: npm
+  args: ["install", "--prefix", "."]

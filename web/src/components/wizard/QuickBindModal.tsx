@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useAppStore } from '../../stores/appStore';
 import {
   CxIconAlertCircle,
   CxIconCheckCircle,
@@ -48,7 +49,7 @@ const PLATFORM_CONFIG: Record<QuickBindPlatform, {
   manualHint: string;
   startCommand: string;
   pollCommand: string;
-  startArgs: Record<string, unknown>;
+  startArgs: (activeModule: string) => Record<string, unknown>;
   pollArgsFn: (deviceCode: string) => Record<string, unknown>;
 }> = {
   feishu: {
@@ -59,7 +60,7 @@ const PLATFORM_CONFIG: Record<QuickBindPlatform, {
     manualHint: '也可在飞书开放平台手动创建应用获取凭证',
     startCommand: 'start_feishu_quick_bind',
     pollCommand: 'poll_feishu_quick_bind',
-    startArgs: {},
+    startArgs: (activeModule: string) => ({ moduleId: activeModule }),
     pollArgsFn: (dc) => ({ deviceCode: dc }),
   },
   wechat: {
@@ -70,7 +71,7 @@ const PLATFORM_CONFIG: Record<QuickBindPlatform, {
     manualHint: '也可通过命令行手动登录',
     startCommand: 'start_wechat_cli_bind',
     pollCommand: 'poll_wechat_cli_bind',
-    startArgs: {},
+    startArgs: (activeModule: string) => ({ moduleId: activeModule }),
     pollArgsFn: () => ({}),
   },
 };
@@ -84,6 +85,7 @@ function formatTime(secs: number): string {
 type Phase = 'loading' | 'qr' | 'done' | 'error';
 
 export default function QuickBindModal({ platform, onComplete, onCancel }: Props) {
+  const activeModule = useAppStore((s) => s.activeModule);
   const cfg = PLATFORM_CONFIG[platform];
   const [phase, setPhase] = useState<Phase>('loading');
   const [qrBase64, setQrBase64] = useState<string | null>(null);
@@ -177,7 +179,7 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const result = await invoke<QuickBindStartResult>(cfg.startCommand, cfg.startArgs);
+      const result = await invoke<QuickBindStartResult>(cfg.startCommand, cfg.startArgs(activeModule));
       if (!mountedRef.current) return;
 
       if (result.success && result.qr_image_base64) {

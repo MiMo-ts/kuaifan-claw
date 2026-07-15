@@ -1,0 +1,8 @@
+id: qqbot
+name: QQ Bot
+description: QQ 机器人通道
+version: "1.0.0"
+kind: channel
+install:
+  command: npm
+  args: ["install", "--prefix", "."]

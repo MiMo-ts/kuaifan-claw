@@ -1,0 +1,60 @@
+{
+  "id": "hermes",
+  "name": "Hermes Agent",
+  "description": "Hermes AI Agent \u7035\u7845\u763d\u6d93\u5ea1\u4f10\u934f\u75af\u7e4d\u741b\u5c7e\u6902",
+  "version": "0.18.2",
+  "category": "agent",
+  "icon": "hermes",
+  "launch": {
+    "command": "{runtimeDir}/python/python.exe",
+    "args": [
+      "-m",
+      "hermes_cli.main",
+      "dashboard",
+      "--port",
+      "{guiPort}",
+      "--host",
+      "127.0.0.1",
+      "--no-open",
+      "--skip-build"
+    ],
+    "cwd": ".",
+    "healthUrl": "http://127.0.0.1:{guiPort}/api/status",
+    "readyTimeoutMs": 60000,
+    "env": {
+      "PYTHONUTF8": "1",
+      "PYTHONIOENCODING": "utf-8"
+    }
+  },
+  "requires": {
+    "python": {
+      "bundled": "python.zip",
+      "min_version": "3.11",
+      "check": "python --version"
+    }
+  },
+  "gui": {
+    "type": "web",
+    "urlTemplate": "http://127.0.0.1:{guiPort}/",
+    "defaultGuiPort": 5174
+  },
+  "ports": {
+    "gui": {
+      "default": 5174,
+      "env": "HERMES_GUI_PORT"
+    },
+    "gateway": {
+      "default": 5174,
+      "env": "HERMES_GATEWAY_PORT"
+    }
+  },
+  "capabilities": [
+    "chat",
+    "tools",
+    "skills",
+    "memory",
+    "cron",
+    "browser",
+    "platforms"
+  ]
+}
