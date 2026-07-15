@@ -611,6 +611,52 @@ mod yaml_channel_mapping_tests {
 }
 
 #[cfg(test)]
+mod control_ui_allowed_origins_tests {
+    use super::ensure_control_ui_allowed_origins;
+    use serde_json::json;
+
+    #[test]
+    fn merges_required_origins_while_preserving_user_entries() {
+        let mut base = json!({
+            "controlUi": { "allowedOrigins": ["https://proxy.example"] }
+        });
+        ensure_control_ui_allowed_origins(&mut base, 18789, &json!("loopback"));
+        let origins = base["controlUi"]["allowedOrigins"].as_array().unwrap();
+        let list: Vec<String> = origins.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        assert!(list.contains(&"http://tauri.localhost".to_string()));
+        assert!(list.contains(&"tauri://localhost".to_string()));
+        assert!(list.contains(&"http://127.0.0.1:18789".to_string()));
+        assert!(list.contains(&"https://proxy.example".to_string()));
+    }
+
+    #[test]
+    fn includes_loopback_and_public_bind_loopback_hosts() {
+        let mut base = json!({});
+        ensure_control_ui_allowed_origins(&mut base, 18999, &json!("0.0.0.0"));
+        let list: Vec<String> = base["controlUi"]["allowedOrigins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        assert!(list.contains(&"http://localhost:18999".to_string()));
+        assert!(list.contains(&"http://127.0.0.1:18999".to_string()));
+    }
+    #[test]
+    fn includes_loopback_origin_for_loopback_bind() {
+        let mut base = json!({});
+        ensure_control_ui_allowed_origins(&mut base, 18789, &json!("loopback"));
+        let list: Vec<String> = base["controlUi"]["allowedOrigins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        assert!(list.contains(&"http://127.0.0.1:18789".to_string()));
+    }
+}
+
+#[cfg(test)]
 mod plugin_entries_normalize_tests {
     use super::{
         ensure_plugins_load_paths, managed_feishu_plugin_project,
@@ -2200,7 +2246,8 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
     sync_feishu_channel_and_routing(data_dir, &mut base);
 
     // 防止多次创建机器人后 extraDirs 堆积，导致网关加载到其它模板机器人的技能
-    prune_stale_skills_extra_dirs(&mut base, data_dir);
+        ensure_control_ui_allowed_origins(&mut base, port, &bind);
+prune_stale_skills_extra_dirs(&mut base, data_dir);
 
     // 确保 plugins.load.paths 包含 node_modules 路径（插件安装在此处）
     let node_modules = PathBuf::from(data_dir).join("openclaw").join("node_modules");
@@ -2822,6 +2869,71 @@ fn build_provider_model_json(provider_id: &str, e: &ProviderCatalogEntry) -> ser
 /// `data/plugins` 是旧版管理端的解压目录，其中的企业微信包曾声明不存在的
 /// `dist/esm/index.js`。保留该目录会让 OpenClaw 先发现失效包，并跳过 npm 中
 /// 已安装的官方插件。
+fn ensure_control_ui_allowed_origins(base: &mut serde_json::Value, port: u16, bind: &serde_json::Value) {
+    let mut required: Vec<String> = vec![
+        "http://tauri.localhost".to_string(),
+        "tauri://localhost".to_string(),
+        "http://localhost".to_string(),
+    ];
+    let bind_str = bind.as_str().unwrap_or("loopback");
+    if bind_str == "0.0.0.0" || bind_str == "::" {
+        required.push(format!("http://127.0.0.1:{}", port));
+        required.push(format!("http://localhost:{}", port));
+    } else if bind_str == "loopback" {
+        required.push(format!("http://127.0.0.1:{}", port));
+    } else {
+        required.push(format!("http://127.0.0.1:{}", port));
+        required.push(format!("http://{}:{}", bind_str, port));
+    }
+    if let Ok(value) = std::env::var("KUAI_FANCLAW_DEV_URL") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            // 形如 http://localhost:5173 → http://localhost:5173
+            // 形如 http://localhost:5173/foo → http://localhost:5173
+            let origin = trimmed
+                .splitn(2, '/')
+                .nth(1)
+                .and_then(|rest| rest.split('/').next())
+                .map(|host| host.trim_end_matches(':').to_string());
+            let candidate = match origin {
+                Some(host) if !host.is_empty() => {
+                    if trimmed.starts_with("https://") {
+                        format!("https://{}", host)
+                    } else {
+                        format!("http://{}", host)
+                    }
+                }
+                _ => trimmed.to_string(),
+            };
+            if !required.contains(&candidate) {
+                required.push(candidate);
+            }
+        }
+    }
+
+    let control_ui = base
+        .as_object_mut()
+        .and_then(|o| o.entry("controlUi".to_string()).or_insert(json!({})).as_object_mut());
+    if let Some(cu) = control_ui {
+        let existing = cu
+            .get("allowedOrigins")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut merged: Vec<String> = existing.clone();
+        for value in required {
+            if !merged.contains(&value) {
+                merged.push(value);
+            }
+        }
+        cu.insert("allowedOrigins".to_string(), json!(merged));
+    }
+}
+
 fn ensure_plugins_load_paths(base: &mut serde_json::Value, node_modules: &std::path::Path) {
     let mut paths: Vec<String> = base
         .pointer("/plugins/load/paths")

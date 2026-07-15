@@ -22,6 +22,16 @@ export function resolveActiveModuleSession(
   sessions: Array<Pick<ModuleSession, "id">>,
 ): string | null {
   if (moduleId === "hermes" && activeSessionId === null) return null;
+  // OpenClaw 的首次刷新会得到空列表；只要用户已经选中持久主会话，
+  // 保持它而不是被空列表重置（避免 main 历史在网关重启后被清空）。
+  if (
+    activeSessionId &&
+    moduleId === "openclaw" &&
+    activeSessionId === DEFAULT_OPENCLAW_MAIN_SESSION &&
+    sessions.length === 0
+  ) {
+    return activeSessionId;
+  }
   return activeSessionId && sessions.some((session) => session.id === activeSessionId)
     ? activeSessionId
     : (sessions[0]?.id ?? null);

@@ -99,6 +99,13 @@ if (moduleSessionProtocolExists) {
     resolveActiveModuleSession,
     sortModuleSessions,
   } = await import(moduleSessionProtocol);
+  test("preserves the existing OpenClaw session list when the first refresh returns empty", () => {
+    const merged = resolveActiveModuleSession("openclaw", "agent:main:main", []);
+    assert.equal(merged, "agent:main:main");
+    assert.deepEqual(sortModuleSessions([]), []);
+  });
+
+
 
   test("uses the persisted main key before the sidebar session refresh completes", () => {
     assert.equal(DEFAULT_OPENCLAW_MAIN_SESSION, "agent:main:main");

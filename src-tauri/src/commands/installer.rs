@@ -2,6 +2,7 @@
 
 use crate::bundled_env::{
     resolve_bundled_openclaw_tarball, resolve_bundled_zip, resolve_bundled_zip_from_project,
+    OPENCLAW_DATA_DIR_NAME,
 };
 use crate::commands::hidden_cmd;
 use crate::env_paths::{
@@ -35,7 +36,7 @@ fn npm_deps_permission_hint(stderr: &str) -> &'static str {
         || s.contains("access is denied")
         || s.contains("拒绝访问")
     {
-        return "\n\n【常见原因】EPERM/权限错误多为杀毒软件实时扫描或 OneDrive 同步占用 node_modules 内文件。\n建议：① 将数据目录加入 Defender 排除项；② 数据目录勿放在 OneDrive 同步文件夹内；③ 完全退出本程序后手动删除「数据目录\\openclaw-cn\\node_modules」，再重新进入向导第 2 步安装。";
+        return "\n\n【常见原因】EPERM/权限错误多为杀毒软件实时扫描或 OneDrive 同步占用 node_modules 内文件。\n建议：① 将数据目录加入 Defender 排除项；② 数据目录勿放在 OneDrive 同步文件夹内；③ 完全退出本程序后手动删除「数据目录\\openclaw\\node_modules」，再重新进入向导第 2 步安装。";
     }
     ""
 }
@@ -49,12 +50,9 @@ impl Drop for InstallHeartbeatGuard {
     }
 }
 
-/// 网关启动与向导「完成」均以 `dist/entry.js` 为准；仅存在 `openclaw-cn` 目录或半成品 `node_modules` 仍视为未安装。
+/// 网关启动与向导「完成」均以官方 CLI 入口 `openclaw.mjs` 为准。
 fn openclaw_core_ready(openclaw_dir: &str) -> bool {
-    Path::new(openclaw_dir)
-        .join("dist")
-        .join("entry.js")
-        .is_file()
+    Path::new(openclaw_dir).join("openclaw.mjs").is_file()
 }
 
 /// `npm install` 是否已实质完成（避免每次向导都全量重装 node_modules）。
@@ -64,7 +62,7 @@ fn openclaw_deps_ready(openclaw_dir: &str) -> bool {
         return false;
     }
     // npm 平铺：核心依赖目录
-    if nm.join("@mariozechner").join("pi-agent-core").is_dir() {
+    if nm.join("commander").is_dir() {
         return true;
     }
     // pnpm：虚拟存储 + 仍会有部分顶层链接
@@ -80,12 +78,12 @@ fn self_data_dir(data_dir: &tauri::State<'_, crate::AppState>) -> String {
 }
 
 // 安装 Node.js（自包含模式：下载官方 .zip，解压到 data/env/node）
-// openclaw-cn 要求 Node.js >= 22
-const NODE_VERSION: &str = "v22.14.0";
+// 官方 OpenClaw 2026.6.11 要求 Node.js >= 22.19。
+const NODE_VERSION: &str = "v24.15.0";
 #[cfg(windows)]
-const NODE_WIN_ZIP: &str = "node-v22.14.0-win-x64.zip";
+const NODE_WIN_ZIP: &str = "node-v24.15.0-win-x64.zip";
 #[cfg(not(windows))]
-const NODE_LINUX_TAR: &str = "node-v22.14.0-linux-x64.tar.gz";
+const NODE_LINUX_TAR: &str = "node-v24.15.0-linux-x64.tar.gz";
 
 #[tauri::command]
 pub async fn install_node(
@@ -680,7 +678,7 @@ pub async fn get_openclaw_version(
     data_dir: tauri::State<'_, crate::AppState>,
 ) -> Result<Option<String>, String> {
     let data_dir = data_dir.inner().get_data_dir();
-    let pkg_path = format!("{}/openclaw-cn/package.json", data_dir);
+    let pkg_path = format!("{}/{}/package.json", data_dir, OPENCLAW_DATA_DIR_NAME);
 
     match tokio::fs::read_to_string(&pkg_path).await {
         Ok(content) => {
@@ -697,15 +695,16 @@ pub async fn get_openclaw_version(
     Ok(None)
 }
 
-/// 向导第 2 步：检测 OpenClaw-CN 是否已完整安装，便于直接跳过。
+/// 向导第 2 步：检测 OpenClaw 是否已完整安装，便于直接跳过。
 #[tauri::command]
 pub async fn get_openclaw_cn_status(
     data_dir: tauri::State<'_, crate::AppState>,
 ) -> Result<OpenClawCnStatus, String> {
     let base = data_dir.inner().get_data_dir();
     let openclaw_dir = format!(
-        "{}/openclaw-cn",
-        base.trim_end_matches(|c| c == '/' || c == '\\')
+        "{}/{}",
+        base.trim_end_matches(|c| c == '/' || c == '\\'),
+        OPENCLAW_DATA_DIR_NAME
     );
     let core = openclaw_core_ready(&openclaw_dir);
     let deps = openclaw_deps_ready(&openclaw_dir);
@@ -750,8 +749,9 @@ pub async fn get_openclaw_install_status(
 ) -> Result<OpenClawInstallStatus, String> {
     let base = data_dir.inner().get_data_dir();
     let openclaw_dir = format!(
-        "{}/openclaw-cn",
-        base.trim_end_matches(|c| c == '/' || c == '\\')
+        "{}/{}",
+        base.trim_end_matches(|c| c == '/' || c == '\\'),
+        OPENCLAW_DATA_DIR_NAME
     );
     let marker_path = format!("{}/.installing", openclaw_dir);
     let marker_exists = Path::new(&marker_path).is_file();
@@ -789,7 +789,7 @@ pub async fn start_openclaw_background_install(
 ) -> Result<String, String> {
     let base = data_dir.inner().get_data_dir();
     let data_base = base.trim_end_matches(|c| c == '/' || c == '\\').to_string();
-    let openclaw_dir = format!("{}/openclaw-cn", data_base);
+    let openclaw_dir = format!("{}/{}", data_base, OPENCLAW_DATA_DIR_NAME);
     let marker_path = format!("{}/.installing", openclaw_dir);
 
     // 读取配置
@@ -896,7 +896,7 @@ pub async fn start_openclaw_background_install(
     // 如果 core 已就绪且 deps 也就绪，不需要后台安装
     if openclaw_core_ready(&openclaw_dir) && openclaw_deps_ready(&openclaw_dir) {
         return Ok(format!(
-            "OpenClaw-CN 已完整安装（{}），无需后台安装",
+            "OpenClaw 已完整安装（{}），无需后台安装",
             openclaw_dir
         ));
     }
@@ -905,13 +905,13 @@ pub async fn start_openclaw_background_install(
     if !openclaw_core_ready(&openclaw_dir) {
         emit(
             &app,
-            InstallProgressEvent::started("openclaw-pkg", "下载 openclaw-cn 程序包…"),
+            InstallProgressEvent::started("openclaw-pkg", "下载 openclaw 程序包…"),
         );
         if let Err(e) = fetch_openclaw_via_npm_pkg(
             &app,
             &data_base,
             &openclaw_dir,
-            "openclaw-cn",
+            "openclaw",
             "latest",
             cfg_allow_scripts,
             cfg_prefer_system,
@@ -920,7 +920,7 @@ pub async fn start_openclaw_background_install(
         )
         .await
         {
-            return Err(format!("下载 openclaw-cn 失败: {}", e));
+            return Err(format!("下载 openclaw 失败: {}", e));
         }
         emit(&app, InstallProgressEvent::finished("openclaw-pkg", "程序包已获取"));
     }
@@ -1073,7 +1073,7 @@ async fn run_npm_install_for_background(
     Ok(())
 }
 
-// ─── 安装 OpenClaw-CN 的核心逻辑 ─────────────────────────────────────────────
+// ─── 安装 OpenClaw 的核心逻辑 ─────────────────────────────────────────────
 
 /// 与 node.exe 同目录的 npm-cli.js（官方 zip/tar 布局：../node_modules/npm/bin/npm-cli.js）
 fn npm_cli_js_next_to_node(node_exe: &Path) -> Option<PathBuf> {
@@ -1500,7 +1500,7 @@ async fn fetch_openclaw_via_registry_tarball(
     registry_override: &str,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
-        .user_agent("openclaw-cn-manager/1.0")
+        .user_agent("openclaw-manager/1.0")
         .connect_timeout(Duration::from_secs(60))
         .timeout(Duration::from_secs(900))
         .build()
@@ -1589,7 +1589,7 @@ async fn fetch_openclaw_via_registry_tarball(
             app,
             InstallProgressEvent::detail(
                 "openclaw-install",
-                "正在删除旧的 openclaw-cn 目录以替换为新包（文件多或杀毒实时扫描时可能持续数分钟，界面会静默）…",
+                "正在删除旧的 openclaw 目录以替换为新包（文件多或杀毒实时扫描时可能持续数分钟，界面会静默）…",
             ),
         );
         tokio::fs::remove_dir_all(openclaw_dir)
@@ -1618,7 +1618,7 @@ async fn fetch_openclaw_via_registry_tarball(
     Ok(())
 }
 
-/// 通过 `npm install <包名>` 从 npm 注册表拉取 openclaw-cn 包到目标目录。
+/// 通过 `npm install <包名>` 从 npm 注册表拉取 openclaw 包到目标目录。
 /// - 优先使用 data/env/node 目录下的 npm，避免 PATH 版本不一致
 /// - 失败时将 stderr 摘要写入返回错误，供 UI 红框展示根因
 async fn fetch_openclaw_via_npm_pkg(
@@ -1718,13 +1718,13 @@ async fn fetch_openclaw_via_npm_pkg(
                          registry tarball 下载已尝试，npm pack 也失败。\n\
                          可能原因：网络问题、registry 配置错误、npm 版本过低。\n\
                          建议：① 检查 app.yaml 中 registry 是否正确；② 确认网络可访问 npm registry；\
-                         ③ 手动在 CMD 中运行 `npm pack openclaw-cn --pack-destination D:\\tmp` 测试是否正常。",
+                         ③ 手动在 CMD 中运行 `npm pack openclaw --pack-destination D:\\tmp` 测试是否正常。",
                         e_pack
                     ),
                 ),
             );
             return Err(format!(
-                "获取 openclaw-cn 包失败。registry tarball 失败，npm pack 也失败:\n{}",
+                "获取 openclaw 包失败。registry tarball 失败，npm pack 也失败:\n{}",
                 e_pack
             ));
         }
@@ -1748,7 +1748,7 @@ async fn fetch_openclaw_via_npm_pkg(
     }
 }
 
-// 安装 OpenClaw-CN
+// 安装 OpenClaw
 #[tauri::command]
 pub async fn install_openclaw(
     app: AppHandle,
@@ -1756,11 +1756,11 @@ pub async fn install_openclaw(
     version: Option<String>,
     force_reinstall: Option<bool>,
 ) -> Result<Vec<InstallProgress>, String> {
-    info!("开始安装 OpenClaw-CN...");
+    info!("开始安装 OpenClaw...");
 
     let mut progress = Vec::new();
     let data_base = data_dir.inner().get_data_dir();
-    let openclaw_dir = format!("{}/openclaw-cn", data_base);
+    let openclaw_dir = format!("{}/{}", data_base, OPENCLAW_DATA_DIR_NAME);
 
     emit(
         &app,
@@ -1800,7 +1800,7 @@ pub async fn install_openclaw(
             &app,
             InstallProgressEvent::finished(
                 "openclaw-install",
-                "OpenClaw-CN 已完整安装（dist/entry.js 与 node_modules 就绪），跳过下载与依赖安装。若需强制重装请使用「重新安装」。",
+                "OpenClaw 已完整安装（openclaw.mjs 与 node_modules 就绪），跳过下载与依赖安装。若需强制重装请使用「重新安装」。",
             ),
         );
         progress.push(InstallProgress {
@@ -1821,26 +1821,7 @@ pub async fn install_openclaw(
             message: "向导内配置初始化完成（可进入下一步）".to_string(),
             status: "success".to_string(),
         });
-        match patch_openclaw_broken_modules(&openclaw_dir).await {
-            Ok(()) => {
-                progress.push(InstallProgress {
-                    step: "patch-broken-modules".to_string(),
-                    progress: 100.0,
-                    message: "已修复 openclaw-cn 损坏模块".to_string(),
-                    status: "success".to_string(),
-                });
-            }
-            Err(e) => {
-                warn!("Patch openclaw broken modules failed (non-fatal): {}", e);
-                progress.push(InstallProgress {
-                    step: "patch-broken-modules".to_string(),
-                    progress: 100.0,
-                    message: format!("修复损坏模块失败（不影响运行）: {}", e),
-                    status: "warning".to_string(),
-                });
-            }
-        }
-        info!("OpenClaw-CN 安装流程已跳过（本机已就绪）");
+        info!("OpenClaw 安装流程已跳过（本机已就绪）");
         return Ok(progress);
     }
 
@@ -1853,7 +1834,7 @@ pub async fn install_openclaw(
             InstallProgressEvent::started(
                 "openclaw-pkg",
                 &format!(
-                    "检测到内置 openclaw-cn 包（{}），优先使用离线解压",
+                    "检测到内置 openclaw 包（{}），优先使用离线解压",
                     bundled_path.display()
                 ),
             ),
@@ -1921,7 +1902,7 @@ pub async fn install_openclaw(
                     InstallProgressEvent::finished(
                         "openclaw-pkg",
                         &format!(
-                            "内置 openclaw-cn 包解压完成（{}），跳过 registry 下载",
+                            "内置 openclaw 包解压完成（{}），跳过 registry 下载",
                             pkg_name
                         ),
                     ),
@@ -1963,7 +1944,7 @@ pub async fn install_openclaw(
                 InstallProgressEvent::detail(
                     "openclaw-install",
                     &format!(
-                        "安装仍在进行…已约 {} 秒。下载大包、杀毒扫描或删除旧 openclaw-cn 时可能长时间无新行，可打开数据目录下 logs/app.log 查看后端日志。",
+                        "安装仍在进行…已约 {} 秒。下载大包、杀毒扫描或删除旧 openclaw 时可能长时间无新行，可打开数据目录下 logs/app.log 查看后端日志。",
                         secs
                     ),
                 ),
@@ -1973,7 +1954,7 @@ pub async fn install_openclaw(
 
     // Step 0 已优先尝试内置包；若成功则跳过本 Step 1（registry 下载）
     if !step0_bundled_ok {
-        // Step 1: 获取本体 —— 仅当已有完整 dist/entry.js 时才跳过拉包；否则目录里可能是中断安装留下的空壳（无 dist），必须重新拉取。
+        // Step 1: 获取本体 —— 仅当已有官方 CLI 入口 openclaw.mjs 时才跳过拉包。
         let dir_exists = std::path::Path::new(&openclaw_dir).exists();
         let core_ok = openclaw_core_ready(&openclaw_dir);
         if dir_exists && core_ok {
@@ -1981,7 +1962,7 @@ pub async fn install_openclaw(
             step: "openclaw-pkg".to_string(),
             progress: 100.0,
             message: format!(
-                "已存在完整 {}（含 dist/entry.js），跳过拉取包；接下来仅为该目录安装/补齐 node_modules",
+                "已存在完整 {}（含 openclaw.mjs），跳过拉取包；接下来仅为该目录安装/补齐 node_modules",
                 pkg_name
             ),
             status: "skipped".to_string(),
@@ -1992,7 +1973,7 @@ pub async fn install_openclaw(
                 &app,
                 InstallProgressEvent::detail(
                     "openclaw-install",
-                    "检测到 openclaw-cn 目录存在但缺少 dist/entry.js（依赖安装曾失败或拷贝不完整），将重新拉取程序包…",
+                    "检测到 openclaw 目录存在但缺少 openclaw.mjs（依赖安装曾失败或拷贝不完整），将重新拉取程序包…",
                 ),
             );
             }
@@ -2013,7 +1994,7 @@ pub async fn install_openclaw(
                     progress.push(InstallProgress {
                         step: "openclaw-pkg".to_string(),
                         progress: 100.0,
-                        message: format!("{} 已获取到 openclaw-cn（含 package.json）", pkg_name),
+                        message: format!("{} 已获取到 openclaw（含 package.json）", pkg_name),
                         status: "success".to_string(),
                     });
                 }
@@ -2030,7 +2011,7 @@ pub async fn install_openclaw(
         }
     } // end Step 1 (skipped when step0_bundled_ok)
 
-    // Step 2: 在 openclaw-cn 内安装依赖（即 package.json 里的 dependencies 等，生成 node_modules）
+    // Step 2: 在 openclaw 内安装依赖（即 package.json 里的 dependencies 等，生成 node_modules）
     if openclaw_deps_ready(&openclaw_dir) {
         emit(
             &app,
@@ -2156,7 +2137,7 @@ pub async fn install_openclaw(
         progress.push(InstallProgress {
             step: "openclaw-deps".to_string(),
             progress: 100.0,
-            message: "已在 openclaw-cn 目录执行 npm install，node_modules 就绪".to_string(),
+            message: "已在 openclaw 目录执行 npm install，node_modules 就绪".to_string(),
             status: "success".to_string(),
         });
     }
@@ -2169,30 +2150,11 @@ pub async fn install_openclaw(
         status: "success".to_string(),
     });
 
-    // Step 4: Patch broken modules in openclaw-cn dist (non-fatal)
-    match patch_openclaw_broken_modules(&openclaw_dir).await {
-        Ok(()) => {
-            progress.push(InstallProgress {
-                step: "patch-broken-modules".to_string(),
-                progress: 100.0,
-                message: "已修复 openclaw-cn 损坏模块".to_string(),
-                status: "success".to_string(),
-            });
-            info!("Patched openclaw-cn broken modules");
-            let _ = tokio::fs::write(
-                std::path::PathBuf::from(&openclaw_dir).join(".patched"), "1"
-            ).await;
-        }
-        Err(e) => {
-            warn!("Patch openclaw broken modules failed (non-fatal): {}", e);
-            progress.push(InstallProgress {
-                step: "patch-broken-modules".to_string(),
-                progress: 100.0,
-                message: format!("修复损坏模块失败（不影响运行）: {}", e),
-                status: "warning".to_string(),
-            });
-        }
-    }
+    // The embedded runtime must remain byte-for-byte equivalent to the official
+    // npm package after extraction. Configuration is written separately by the
+    // gateway and plugin commands.
+    info!("Official OpenClaw package installed without runtime patches");
+    return Ok(progress);
 
     // 修复缺失的 strip-ansi 依赖（pi-coding-agent 未声明该依赖）
     // 使用内置 Node.js 的 npm（用户机 PATH 可能不含 npm）
@@ -2311,11 +2273,11 @@ module.exports.default = module.exports;
         }
     }
 
-    info!("OpenClaw-CN 安装完成");
+    info!("OpenClaw 安装完成");
     Ok(progress)
 }
 
-/// 将 openclaw-cn 的默认 Bonjour/gateway 名称 "Clawdbot" 替换为 "快泛助手"
+/// 将 openclaw 的默认 Bonjour/gateway 名称 "Clawdbot" 替换为 "快泛助手"
 async fn patch_gateway_bonjour_name(openclaw_dir: &str) -> Result<(), String> {
     let candidates = vec![
         "dist/gateway/server/bonjour.js",
@@ -2337,9 +2299,9 @@ async fn patch_gateway_bonjour_name(openclaw_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-// ─── Post-install patches for broken modules in openclaw-cn npm package ───────────
+// ─── Post-install patches for broken modules in openclaw npm package ───────────
 
-const GATEWAY_USAGE_PATCH_MARKER: &str = "openclaw-cn-manager: localhost gateway usage bypass";
+const GATEWAY_USAGE_PATCH_MARKER: &str = "openclaw-manager: localhost gateway usage bypass";
 
 /// 允许本机环回、仅网关 token 且无 device scopes 的连接调用只读用量 RPC（供管理端 WS 拉取用量）。
 /// 与 `gateway_ws::call_gateway_method` 配套；安装与每次启动网关前各尝试一次（幂等）。
@@ -2358,7 +2320,7 @@ pub(crate) async fn patch_openclaw_gateway_localhost_usage(
         return Err("server-methods.js 中未找到 scopes 声明（上游结构可能已变）".to_string());
     }
     let inject = r#"    const scopes = client.connect.scopes ?? [];
-    // openclaw-cn-manager: localhost gateway usage bypass — 本机 token 连接无 device scopes 时仍允许只读用量 RPC
+    // openclaw-manager: localhost gateway usage bypass — 本机 token 连接无 device scopes 时仍允许只读用量 RPC
     const _mgrIp = (client.clientIp ?? "").trim();
     const _mgrLoopback = _mgrIp === "127.0.0.1" || _mgrIp === "::1" || _mgrIp === "::ffff:127.0.0.1";
     const _mgrUsageMethods = new Set(["usage.status", "usage.cost", "sessions.usage", "sessions.usage.timeseries", "sessions.usage.logs"]);
@@ -2376,7 +2338,7 @@ pub(crate) async fn patch_openclaw_gateway_localhost_usage(
 }
 
 const SHELL_UTILS_MANAGER_HEUR_MARKER: &str =
-    "OpenClaw-CN Manager patch: Windows exec shell (heuristic)";
+    "OpenClaw Manager patch: Windows exec shell (heuristic)";
 const SHELL_UTILS_NODE_PS_LINES: &str =
     "    if (/\\bnode\\s+(-e|--eval)\\b/i.test(c))\n        return true;\n";
 
@@ -2479,7 +2441,7 @@ export function normalizeWindowsExecCommand(command) {
     Ok(())
 }
 
-const BASH_EXEC_WIN_NORM_MARKER: &str = "openclaw-cn-manager: normalizeWindowsExecCommand";
+const BASH_EXEC_WIN_NORM_MARKER: &str = "openclaw-manager: normalizeWindowsExecCommand";
 
 /// 在 exec 进程启动前对 Windows 命令做规范化（依赖 shell-utils.normalizeWindowsExecCommand）。
 pub(crate) async fn patch_bash_tools_exec_windows_command_normalize(
@@ -2512,7 +2474,7 @@ pub(crate) async fn patch_bash_tools_exec_windows_command_normalize(
         return Ok(());
     }
     let run_old = "async function runExecProcess(opts) {\n    const startedAt = Date.now();";
-    let run_new = "async function runExecProcess(opts) {\n    // openclaw-cn-manager: normalizeWindowsExecCommand\n    if (process.platform === \"win32\") {\n        opts.command = normalizeWindowsExecCommand(opts.command);\n    }\n    const startedAt = Date.now();";
+    let run_new = "async function runExecProcess(opts) {\n    // openclaw-manager: normalizeWindowsExecCommand\n    if (process.platform === \"win32\") {\n        opts.command = normalizeWindowsExecCommand(opts.command);\n    }\n    const startedAt = Date.now();";
     if !s.contains(run_old) {
         warn!("bash-tools.exec.js: runExecProcess 开头未匹配，跳过 Windows 命令规范化");
         return Ok(());
@@ -2537,8 +2499,8 @@ pub(crate) async fn patch_shell_utils_windows_bat_exec_normalize(
     let mut su = tokio::fs::read_to_string(&shell_utils_file)
         .await
         .map_err(|e| format!("读取 shell-utils.js 失败: {}", e))?;
-    const HEUR_MARKER: &str = "openclaw-cn-manager: 含盘符/UNC 的 .bat/.cmd";
-    const BATCH_NORM_MARKER: &str = "openclaw-cn-manager: batch-call-normalize";
+    const HEUR_MARKER: &str = "openclaw-manager: 含盘符/UNC 的 .bat/.cmd";
+    const BATCH_NORM_MARKER: &str = "openclaw-manager: batch-call-normalize";
     if su.contains(BATCH_NORM_MARKER) && su.contains(HEUR_MARKER) {
         return Ok(());
     }
@@ -2556,7 +2518,7 @@ pub(crate) async fn patch_shell_utils_windows_bat_exec_normalize(
     const NEW_NORM: &str = r##"export function normalizeWindowsExecCommand(command) {
     if (process.platform !== "win32" || typeof command !== "string")
         return command;
-    // openclaw-cn-manager: batch-call-normalize — cmd /c "x.bat --a" 会被当成单个可执行文件名，改为 call "x.bat" --a
+    // openclaw-manager: batch-call-normalize — cmd /c "x.bat --a" 会被当成单个可执行文件名，改为 call "x.bat" --a
     let c = command.replace(/\btype\s+"([^"\r\n]+)"/gi, (_m, p) => {
         const inner = String(p);
         if (/\s/.test(inner))
@@ -2580,7 +2542,7 @@ pub(crate) async fn patch_shell_utils_windows_bat_exec_normalize(
 }"#;
     const LOOK_NEW: &str = r#"    if (/^\s*cmd\s+/i.test(c))
         return true;
-    // openclaw-cn-manager: 含盘符/UNC 的 .bat/.cmd 固定走 cmd，裸路径交给 PowerShell 易解析失败
+    // openclaw-manager: 含盘符/UNC 的 .bat/.cmd 固定走 cmd，裸路径交给 PowerShell 易解析失败
     if (/(?:[A-Za-z]:\\|\\\\)[^\n\r"|&]*\.(?:bat|cmd)\b/i.test(c))
         return true;
     return false;
@@ -2634,7 +2596,7 @@ pub(crate) async fn patch_sessions_usage_aggregate_fix(openclaw_dir: &str) -> Re
 
     const SLICE_LINE: &str = "        const limitedEntries = mergedEntries.slice(0, limit);";
     const SLICE_INJECT: &str = r#"        const limitedEntries = mergedEntries.slice(0, limit);
-        // openclaw-cn-manager: sessions.usage — 汇总遍历全量会话，列表仍受 limit 约束
+        // openclaw-manager: sessions.usage — 汇总遍历全量会话，列表仍受 limit 约束
         const _mgrSessionsUsageLimitedKeys = new Set(limitedEntries.map((e) => e.key));"#;
     if content.contains(SLICE_LINE) && !content.contains(SESSIONS_USAGE_AGG_MARKER) {
         content = content.replace(SLICE_LINE, SLICE_INJECT);
@@ -2711,7 +2673,7 @@ pub(crate) async fn patch_sessions_usage_session_display_fallbacks(
             const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;"#;
 
     const CHANNEL_NEW: &str = r#"            const agentId = parseAgentSessionKey(merged.key)?.agentId;
-            // openclaw-cn-manager: _mgrSessionUsageInferDisplay — store 未写 channel 时从 session key 推断（如 agent:x:feishu:group:id）
+            // openclaw-manager: _mgrSessionUsageInferDisplay — store 未写 channel 时从 session key 推断（如 agent:x:feishu:group:id）
             let channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
             if (!channel) {
                 const parsedKey = parseAgentSessionKey(merged.key);
@@ -2789,7 +2751,7 @@ pub(crate) async fn patch_session_cost_usage_utc_and_discover(
 
     // ── 1. formatDayKey: 改用 UTC ──────────────────────────────────────────
     const FDK_OLD: &str = r#"const formatDayKey = (date) => date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });"#;
-    const FDK_NEW: &str = r#"// openclaw-cn-manager: _mgrScuUtcDayKey — 用 UTC 避免服务器时区偏移导致日趋势错位
+    const FDK_NEW: &str = r#"// openclaw-manager: _mgrScuUtcDayKey — 用 UTC 避免服务器时区偏移导致日趋势错位
 const formatDayKey = (date) => date.toISOString().slice(0, 10);"#;
     if !content.contains(FDK_OLD) {
         return Err("session-cost-usage.js: 未找到 formatDayKey（上游可能已变）".to_string());
@@ -2802,7 +2764,7 @@ const formatDayKey = (date) => date.toISOString().slice(0, 10);"#;
             continue;
         }
         // Do not exclude by endMs"#;
-    const DISC_NEW: &str = r#"        // openclaw-cn-manager: _mgrScuDiscoverNoMtimeFilter — 不按 mtime 预过滤；
+    const DISC_NEW: &str = r#"        // openclaw-manager: _mgrScuDiscoverNoMtimeFilter — 不按 mtime 预过滤；
         // 存在"文件 mtime 在 30 天前，但文件内消息在范围内"的会话，
         // 其 mtime 会后延到最近一次写入，但仍应被发现。
         // 后续 loadSessionCostSummary 在 entry 级别做日期范围过滤。
@@ -2820,7 +2782,7 @@ const formatDayKey = (date) => date.toISOString().slice(0, 10);"#;
         since.setDate(since.getDate() - (days - 1));
         sinceTime = since.getTime();
         untilTime = now.getTime();"#;
-    const COST_NEW: &str = r#"        // openclaw-cn-manager: _mgrScuCostSinceUtc — 与 parseDateRange 保持一致，统一用 UTC
+    const COST_NEW: &str = r#"        // openclaw-manager: _mgrScuCostSinceUtc — 与 parseDateRange 保持一致，统一用 UTC
         // 修复：untilTime 必须覆盖完整当天 UTC（到 23:59:59.999），否则最后一天的数据全被漏掉。
         // 旧代码 untilTime = now.getTime() 导致在 parseDateRange 的 <= 过滤中，
         // 当天 00:00 UTC < untilTime == 当天 00:00 UTC 时毫秒级差值导致全漏。
@@ -2876,7 +2838,7 @@ pub(crate) async fn patch_sessions_usage_all_agents(openclaw_dir: &str) -> Resul
                 startMs,
                 endMs,
             });"#;
-    const NEW_CALL: &str = r#"            // openclaw-cn-manager: _mgrUsageAllAgents — 遍历所有 agent 而非仅 "main"
+    const NEW_CALL: &str = r#"            // openclaw-manager: _mgrUsageAllAgents — 遍历所有 agent 而非仅 "main"
             // upstream bug: discoverAllSessions(undefined) → agentId="main" → 漏扫 inst_xxx 等活跃 agent。
             // 用 loadConfig().agents.list 收集全量 agent_id，discoverAllSessions 并行扫描，去重合并。
             const _mgrAllAgents = loadConfig().agents.list ?? [];
@@ -2911,18 +2873,18 @@ pub(crate) async fn patch_sessions_usage_all_agents(openclaw_dir: &str) -> Resul
     Ok(())
 }
 
-/// Patches two known-broken JS files in the openclaw-cn dist that cause gateway startup to crash:
+/// Patches two known-broken JS files in the openclaw dist that cause gateway startup to crash:
 /// 1. dist/commands/onboarding/registry.js — imports qqbot.js which doesn't exist in the npm package
 /// 2. dist/plugin-sdk/index.js — re-exports feishuOutbound and normalizeFeishuTarget from non-existent paths
 ///
-/// This is a band-aid for an upstream bug in the published openclaw-cn npm package.
+/// This is a band-aid for an upstream bug in the published openclaw npm package.
 /// Runs after install_openclaw completes; failures are logged but do not block installation.
 pub async fn patch_openclaw_broken_modules(openclaw_dir: &str) -> Result<(), String> {
     // 1. Patch registry.js — replace broken static imports with inline stubs
     let registry_path = format!("{}/dist/commands/onboarding/registry.js", openclaw_dir);
-    let stub_registry = r#"// Broken imports — patched by openclaw-cn-manager installer
+    let stub_registry = r#"// Broken imports — patched by openclaw-manager installer
 import { listChannelPlugins } from "../../channels/plugins/index.js";
-// qqbot: dist file missing in openclaw-cn npm package
+// qqbot: dist file missing in openclaw npm package
 const _stub_qqbot = {
     channel: "qqbot",
     getStatus: () => ({ configured: false, statusLines: [], selectionHint: "", quickstartScore: 10 }),
@@ -2988,11 +2950,11 @@ export const listProviderOnboardingAdapters = listChannelOnboardingAdapters;
         .map(|line| {
             let t = line.trim();
             if t.starts_with("export { feishuOutbound } from") {
-                "// feishuOutbound re-export fixed by openclaw-cn-manager\n\
+                "// feishuOutbound re-export fixed by openclaw-manager\n\
                  export { feishuOutbound } from \"../channels/plugins/outbound/feishu.js\";"
                     .to_string()
             } else if t.starts_with("export { normalizeFeishuTarget } from") {
-                "// normalizeFeishuTarget re-export fixed by openclaw-cn-manager\n\
+                "// normalizeFeishuTarget re-export fixed by openclaw-manager\n\
                  export { normalizeFeishuTarget } from \"../channels/plugins/normalize/feishu.js\";"
                     .to_string()
             } else {
@@ -3008,7 +2970,7 @@ export const listProviderOnboardingAdapters = listChannelOnboardingAdapters;
     info!("Patched dist/plugin-sdk/index.js (fixed feishu re-export paths)");
 
     // 2b. Create missing plugin-sdk sub-modules (runtime-store / channel-config-schema).
-    //     Upstream openclaw-cn npm package references these in package.json exports
+    //     Upstream openclaw npm package references these in package.json exports
     //     but does not ship the actual .js files, causing plugins (wecom, wechat_clawbot)
     //     to fail with "Cannot find module '.../index.js/runtime-store'" etc.
 
@@ -3383,10 +3345,10 @@ export const listProviderOnboardingAdapters = listChannelOnboardingAdapters;
     let su_content = tokio::fs::read_to_string(&shell_utils_file)
         .await
         .map_err(|e| format!("读取 shell-utils.js 失败: {}", e))?;
-    const SU_MARKER_HEUR: &str = "OpenClaw-CN Manager patch: Windows exec shell (heuristic)";
+    const SU_MARKER_HEUR: &str = "OpenClaw Manager patch: Windows exec shell (heuristic)";
     let block_cmd = r#"export function getShellConfig() {
     if (process.platform === "win32") {
-        // OpenClaw-CN Manager patch: exec shell (cmd) for LLM-generated CMD/bash one-liners.
+        // OpenClaw Manager patch: exec shell (cmd) for LLM-generated CMD/bash one-liners.
         // Upstream uses PowerShell (-Command); strings like `2>nul || echo` cause ParserError InvalidEndOfLine.
         const comspec = process.env.ComSpec?.trim();
         const shell = comspec && comspec.length > 0 ? comspec : "cmd.exe";
@@ -3454,7 +3416,7 @@ export function getShellConfig(command) {
         const psArgs = ["-NoProfile", "-NonInteractive", "-Command"];
         const cmdText = typeof command === "string" ? command : "";
         const chainedAmp = cmdText.includes("&&");
-        // OpenClaw-CN Manager patch: Windows exec shell (heuristic).
+        // OpenClaw Manager patch: Windows exec shell (heuristic).
         // cmd.exe breaks python/node -c quoting; PowerShell chokes on `2>nul`, `||`, %VAR%.
         // Windows PowerShell 5.1 常不支持 `cd x && python y` → ParserError InvalidEndOfLine；含 && 走 cmd。
         if (windowsExecNeedsPowershellQuoting(cmdText) && !chainedAmp)
@@ -3544,5 +3506,222 @@ export function getShellConfig(command) {
         Err(e) => warn!("sessions.usage 全 agent 发现补丁未应用: {}", e),
     }
 
+    match patch_feishu_streaming_cards(openclaw_dir).await {
+        Ok(0) => warn!("未找到可修补的飞书流式卡片实现，保留上游行为"),
+        Ok(count) => info!("Patched {} Feishu streaming-card implementation(s) (append-only updates)", count),
+        Err(e) => warn!("飞书流式卡片补丁未应用: {}", e),
+    }
+
+    match patch_feishu_dm_dispatch_serialize(openclaw_dir).await {
+        Ok(0) => warn!("未找到可修补的飞书 DM dispatch 路径，保留上游行为"),
+        Ok(count) => info!("Patched {} Feishu monitor(s) to serialise DM dispatch by (accountId, chatId)", count),
+        Err(e) => warn!("飞书 DM dispatch 串行化补丁未应用: {}", e),
+    }
+
     Ok(())
+}
+
+// kuaifanclaw:feishu-dm-dispatch-serialize marker begin
+const FEISHU_DISPATCH_SERIALIZE_MARKER: &str = "// kuaifanclaw:feishu-dm-dispatch-serialize";
+const FEISHU_DISPATCH_SERIALIZE_FACTORY: &str = r#"// kuaifanclaw:feishu-dm-dispatch-serialize
+const feishuDispatchQueues = /* @__PURE__ */ new Map();
+function serializeFeishuDispatch(params) {
+  const accountId = params && params.accountId != null ? String(params.accountId) : "default";
+  const chatId = params && params.chatId != null ? String(params.chatId) : "default";
+  const key = accountId + "::" + chatId;
+  const previous = feishuDispatchQueues.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => createFeishuReplyDispatcher(params));
+  feishuDispatchQueues.set(key, next.then(() => undefined, () => undefined));
+  if (feishuDispatchQueues.size > 256) {
+    for (const [queueKey, queuePromise] of feishuDispatchQueues) {
+      if (queuePromise === next) continue;
+      queuePromise.finally(() => queuePromise !== feishuDispatchQueues.get(queueKey) && feishuDispatchQueues.delete(queueKey));
+    }
+  }
+  return next;
+}
+"#;
+// kuaifanclaw:feishu-dm-dispatch-serialize marker end
+const FEISHU_STREAMING_UPDATE_OLD: &str = r#"if (await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`)) && this.state) this.state.sentText = mergedText;"#;
+const FEISHU_STREAMING_UPDATE_NEW: &str = r#"const previouslySentText = this.state.sentText;
+			const appendedText = mergedText.startsWith(previouslySentText) ? mergedText.slice(previouslySentText.length) : "";
+			const sent = appendedText ? await this.updateCardContent(appendedText, (e) => this.log?.(`Update failed: ${String(e)}`)) : await this.replaceCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
+			if (sent && this.state) this.state.sentText = mergedText;"#;
+const FEISHU_STREAMING_FINAL_OLD: &str = r#"const sent = text.startsWith(this.state.sentText) ? await this.updateCardContent(text, (e) => this.log?.(`Final update failed: ${String(e)}`)) : await this.replaceCardContent(text, (e) => this.log?.(`Final replace failed: ${String(e)}`));"#;
+const FEISHU_STREAMING_FINAL_NEW: &str = r#"const appendedText = text.startsWith(this.state.sentText) ? text.slice(this.state.sentText.length) : "";
+			const sent = appendedText ? await this.updateCardContent(appendedText, (e) => this.log?.(`Final update failed: ${String(e)}`)) : await this.replaceCardContent(text, (e) => this.log?.(`Final replace failed: ${String(e)}`));"#;
+
+fn patch_feishu_streaming_card_source(source: &str) -> Result<String, String> {
+    let patched = source
+        .replace(FEISHU_STREAMING_UPDATE_OLD, FEISHU_STREAMING_UPDATE_NEW)
+        .replace(FEISHU_STREAMING_FINAL_OLD, FEISHU_STREAMING_FINAL_NEW);
+    if patched == source {
+        return Err("未匹配到已知的飞书流式卡片更新代码".to_string());
+    }
+    Ok(patched)
+}
+
+async fn patch_feishu_dm_dispatch_serialize(openclaw_dir: &str) -> Result<usize, String> {
+    let plugin_dir = Path::new(openclaw_dir)
+        .join("node_modules")
+        .join("@openclaw")
+        .join("feishu")
+        .join("dist");
+    if !plugin_dir.is_dir() {
+        return Ok(0);
+    }
+
+    let mut entries = tokio::fs::read_dir(&plugin_dir)
+        .await
+        .map_err(|e| format!("读取飞书插件目录失败: {}", e))?;
+    let mut patched_count = 0;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("遍历飞书插件目录失败: {}", e))?
+    {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with("monitor.account-") || !file_name.ends_with(".js") {
+            continue;
+        }
+        let path = entry.path();
+        let source = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| format!("读取飞书 dispatch 源文件失败: {}", e))?;
+        let Ok(patched) = patch_feishu_dm_dispatch_source(&source) else {
+            continue;
+        };
+        tokio::fs::write(&path, patched)
+            .await
+            .map_err(|e| format!("写入飞书 dispatch 串行化补丁失败: {}", e))?;
+        patched_count += 1;
+    }
+    Ok(patched_count)
+}
+
+fn patch_feishu_dm_dispatch_source(source: &str) -> Result<String, String> {
+    if source.contains(FEISHU_DISPATCH_SERIALIZE_MARKER) {
+        return Err("已应用过 dispatch 串行化补丁".to_string());
+    }
+    if !source.contains("function createFeishuReplyDispatcher(") {
+        return Err("未识别 createFeishuReplyDispatcher 定义".to_string());
+    }
+    let mut patched = source.replace(
+        "createFeishuReplyDispatcher({",
+        "serializeFeishuDispatch({",
+    );
+    let factory = format!(
+        "{}\n{}\n",
+        FEISHU_DISPATCH_SERIALIZE_FACTORY.replace('\n', "\n"),
+        FEISHU_DISPATCH_SERIALIZE_MARKER,
+    );
+    let insert_at = patched
+        .find("function createFeishuReplyDispatcher(")
+        .ok_or_else(|| "未找到 createFeishuReplyDispatcher 函数".to_string())?;
+    patched.insert_str(insert_at, &factory);
+    Ok(patched)
+}
+
+async fn patch_feishu_streaming_cards(openclaw_dir: &str) -> Result<usize, String> {
+    let plugin_dir = Path::new(openclaw_dir)
+        .join("node_modules")
+        .join("@openclaw")
+        .join("feishu")
+        .join("dist");
+    if !plugin_dir.is_dir() {
+        return Ok(0);
+    }
+
+    let mut entries = tokio::fs::read_dir(&plugin_dir)
+        .await
+        .map_err(|e| format!("读取飞书插件目录失败: {}", e))?;
+    let mut patched_count = 0;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("遍历飞书插件目录失败: {}", e))?
+    {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with("monitor.account-") || !file_name.ends_with(".js") {
+            continue;
+        }
+        let path = entry.path();
+        let source = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| format!("读取飞书流式卡片实现失败: {}", e))?;
+        let Ok(patched) = patch_feishu_streaming_card_source(&source) else {
+            continue;
+        };
+        tokio::fs::write(&path, patched)
+            .await
+            .map_err(|e| format!("写入飞书流式卡片补丁失败: {}", e))?;
+        patched_count += 1;
+    }
+    Ok(patched_count)
+}
+
+#[cfg(test)]
+mod feishu_dm_dispatch_tests {
+    use super::patch_feishu_dm_dispatch_source;
+
+    #[test]
+    fn wraps_each_create_dispatch_call_with_serialize_wrapper() {
+        let source = "function createFeishuReplyDispatcher(params) { return params; } const a = createFeishuReplyDispatcher({ cfg, agentId });";
+        let patched = patch_feishu_dm_dispatch_source(source).unwrap();
+        assert!(patched.contains("feishuDispatchQueues"));
+        assert!(patched.contains("serializeFeishuDispatch({"));
+        assert!(!patched.contains("createFeishuReplyDispatcher({"));
+    }
+
+    #[test]
+    fn is_idempotent() {
+        let source = "function createFeishuReplyDispatcher(params) { return params; } const a = createFeishuReplyDispatcher({ cfg });";
+        let once = patch_feishu_dm_dispatch_source(source).unwrap();
+        let err = patch_feishu_dm_dispatch_source(&once).unwrap_err();
+        assert!(err.contains("已应用过"));
+    }
+
+    #[test]
+    fn rejects_files_without_create_dispatch() {
+        let source = "// unrelated module";
+        let err = patch_feishu_dm_dispatch_source(source).unwrap_err();
+        assert!(err.contains("未识别"));
+    }
+}
+
+#[cfg(test)]
+mod feishu_streaming_patch_tests {
+    use super::patch_feishu_streaming_card_source;
+
+    #[test]
+    fn patches_streaming_card_updates_to_send_only_the_new_suffix() {
+        let upstream = r#"
+	async update(text) {
+		if (!this.state || this.closed) return;
+		const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
+		if (!mergedInput || mergedInput === this.state.currentText) return;
+		this.pendingText = mergedInput;
+		this.clearFlushTimer();
+		this.lastUpdateTime = now;
+		this.queue = this.queue.then(async () => {
+			if (!this.state || this.closed) return;
+			const nextText = this.pendingText ?? mergedInput;
+			const mergedText = mergeStreamingText(this.state.currentText, nextText);
+			if (!mergedText || mergedText === this.state.currentText) return;
+			if (mergedText === this.state.sentText) return;
+			this.pendingText = null;
+			this.state.currentText = mergedText;
+			if (await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`)) && this.state) this.state.sentText = mergedText;
+		});
+	}
+"#;
+
+        let patched = patch_feishu_streaming_card_source(upstream).expect("patch should apply");
+
+        assert!(patched.contains("const appendedText = mergedText.startsWith(previouslySentText)"));
+        assert!(patched.contains("this.updateCardContent(appendedText"));
+        assert!(!patched.contains("this.updateCardContent(mergedText"));
+    }
 }
