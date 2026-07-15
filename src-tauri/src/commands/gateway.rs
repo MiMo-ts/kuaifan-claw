@@ -98,13 +98,13 @@ const CHANNEL_META: &[(&str, ChannelMeta)] = &[
             yaml_channel_to_account_id: |instance_id| normalize_account_id(instance_id),
         },
     ),
-    // 企业微信：通道 id wecom；bundled stub manifest id 为 "wecom"（与 channel id 同），npm 官方包为 "wecom-openclaw-plugin"
+    // 企业微信：通道 id 为 wecom，官方插件 manifest id 为 wecom-openclaw-plugin。
     (
         "wxwork",
         ChannelMeta {
             openclaw_channel_id: "wecom",
             single_account: true,
-            plugin_enabled_key: Some("wecom"),
+            plugin_enabled_key: Some("wecom-openclaw-plugin"),
             field_aliases: &[
                 ("botId", "botId"),
                 ("agentId", "botId"), // 向导里填的是 agentId → 映射到 botId
@@ -185,6 +185,8 @@ fn remove_legacy_manager_browser_config(base: &mut serde_json::Value) {
 fn instances_yaml_path(data_dir: &str) -> PathBuf {
     PathBuf::from(data_dir)
         .join("config")
+        .join("modules")
+        .join("openclaw")
         .join("instances.yaml")
 }
 
@@ -229,6 +231,43 @@ fn is_legacy_wrong_robots_subdir_name(name: &str) -> bool {
     false
 }
 
+fn workspace_robot_dir_name(workspace: &str) -> Option<String> {
+    let normalized = workspace.replace('\\', "/");
+    let (_, suffix) = normalized.rsplit_once("/robots/")?;
+    let name = suffix.split('/').next()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+fn active_agent_workspace_dir_names(base: &serde_json::Value) -> HashSet<String> {
+    base.pointer("/agents/list")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|agent| agent.get("workspace").and_then(|v| v.as_str()))
+        .filter_map(workspace_robot_dir_name)
+        .collect()
+}
+
+fn read_active_agent_workspace_dir_names(data_dir: &str) -> HashSet<String> {
+    let content = match std::fs::read_to_string(openclaw_json_path(data_dir)) {
+        Ok(content) => content,
+        Err(_) => return HashSet::new(),
+    };
+    serde_json::from_str::<serde_json::Value>(&content)
+        .map(|base| active_agent_workspace_dir_names(&base))
+        .unwrap_or_default()
+}
+
+fn should_cleanup_legacy_workspace_dir(
+    name: &str,
+    robot_ids: &HashSet<String>,
+    active_workspace_dirs: &HashSet<String>,
+) -> bool {
+    is_legacy_wrong_robots_subdir_name(name)
+        && !robot_ids.contains(name)
+        && !active_workspace_dirs.contains(name)
+}
+
 /// 删除 `robots/` 下已不再作为任何实例 `robot_id` 的旧版误生成目录。
 /// `.../robots/{robot_id}/skills` 形式的 extraDir → 返回 robot_id；其它路径返回 None（保留不删）。
 fn extra_dir_robot_id(path: &str) -> Option<String> {
@@ -243,9 +282,9 @@ fn extra_dir_robot_id(path: &str) -> Option<String> {
     None
 }
 
-/// 从 `skills.load.extraDirs` 去掉未被任何实例 `robot_id` 引用的机器人技能目录，避免「一个实例却加载多个机器人技能」。
-fn prune_stale_skills_extra_dirs(base: &mut serde_json::Value, data_dir: &str) {
-    let keep = read_all_robot_ids_from_instances_yaml(data_dir);
+/// Robot skills are workspace-local. They must never be placed in the global
+/// `extraDirs` list because that makes every agent see every robot's skills.
+fn prune_stale_skills_extra_dirs(base: &mut serde_json::Value, _data_dir: &str) {
     let Some(extra) = base
         .get_mut("skills")
         .and_then(|s| s.get_mut("load"))
@@ -260,14 +299,11 @@ fn prune_stale_skills_extra_dirs(base: &mut serde_json::Value, data_dir: &str) {
         };
         match extra_dir_robot_id(s) {
             Some(rid) => {
-                let ok = keep.contains(&rid);
-                if !ok {
-                    info!(
-                        "已从 skills.extraDirs 移除未被实例引用的目录: {} (robot_id={})",
-                        s, rid
-                    );
-                }
-                ok
+                info!(
+                    "已从全局 skills.extraDirs 移除机器人专属目录: {} (robot_id={})",
+                    s, rid
+                );
+                false
             }
             None => true,
         }
@@ -276,6 +312,7 @@ fn prune_stale_skills_extra_dirs(base: &mut serde_json::Value, data_dir: &str) {
 
 async fn cleanup_legacy_wrong_robot_workspace_dirs(data_dir: &str) {
     let keep = read_all_robot_ids_from_instances_yaml(data_dir);
+    let active_workspace_dirs = read_active_agent_workspace_dir_names(data_dir);
     let root = PathBuf::from(data_dir).join("robots");
     let entries = match std::fs::read_dir(&root) {
         Ok(e) => e,
@@ -289,10 +326,7 @@ async fn cleanup_legacy_wrong_robot_workspace_dirs(data_dir: &str) {
         let Some(name) = ent.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if keep.contains(&name) {
-            continue;
-        }
-        if !is_legacy_wrong_robots_subdir_name(&name) {
+        if !should_cleanup_legacy_workspace_dir(&name, &keep, &active_workspace_dirs) {
             continue;
         }
         match tokio::fs::remove_dir_all(&path).await {
@@ -578,11 +612,16 @@ mod yaml_channel_mapping_tests {
 
 #[cfg(test)]
 mod plugin_entries_normalize_tests {
-    use super::normalize_plugin_entries_keys;
+    use super::{
+        ensure_plugins_load_paths, managed_feishu_plugin_project,
+        migrate_legacy_feishu_managed_plugin, normalize_plugin_entries_keys,
+        sync_manager_channel_plugin_entries,
+    };
     use serde_json::json;
+    use std::collections::HashSet;
 
     #[test]
-    fn merges_wecom_connector_into_wecom() {
+    fn migrates_wecom_connector_to_plugin_manifest_id() {
         let mut base = json!({
             "plugins": {
                 "entries": {
@@ -594,12 +633,12 @@ mod plugin_entries_normalize_tests {
         normalize_plugin_entries_keys(&mut base);
         let e = base["plugins"]["entries"].as_object().unwrap();
         assert!(!e.contains_key("wecom-connector"));
-        assert_eq!(e.get("wecom").unwrap()["enabled"], true);
+        assert_eq!(e.get("wecom-openclaw-plugin").unwrap()["enabled"], true);
         assert_eq!(e.get("feishu").unwrap()["enabled"], true);
     }
 
     #[test]
-    fn merges_wecom_openclaw_plugin_into_wecom() {
+    fn preserves_wecom_plugin_manifest_id() {
         let mut base = json!({
             "plugins": {
                 "entries": {
@@ -610,9 +649,77 @@ mod plugin_entries_normalize_tests {
         });
         normalize_plugin_entries_keys(&mut base);
         let e = base["plugins"]["entries"].as_object().unwrap();
-        assert!(!e.contains_key("wecom-openclaw-plugin"));
-        assert_eq!(e.get("wecom").unwrap()["enabled"], true);
+        assert!(e.contains_key("wecom-openclaw-plugin"));
+        assert_eq!(
+            e.get("wecom-openclaw-plugin").unwrap()["enabled"],
+            true
+        );
         assert_eq!(e.get("feishu").unwrap()["enabled"], true);
+    }
+
+    #[test]
+    fn enables_external_plugins_using_manifest_ids() {
+        let mut base = json!({ "plugins": { "entries": {} } });
+        let enabled = HashSet::from(["wecom", "openclaw-weixin", "qqbot"]);
+
+        sync_manager_channel_plugin_entries(&mut base, &enabled);
+
+        let entries = base["plugins"]["entries"].as_object().unwrap();
+        assert_eq!(
+            entries.get("wecom-openclaw-plugin").unwrap()["enabled"],
+            true
+        );
+        assert_eq!(entries.get("openclaw-weixin").unwrap()["enabled"], true);
+        assert_eq!(entries.get("qqbot").unwrap()["enabled"], true);
+        assert!(!entries.contains_key("wecom"));
+    }
+
+    #[test]
+    fn removes_untrusted_openclaw_scope_but_keeps_other_channel_scopes() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("data");
+        let node_modules = data_dir.join("openclaw").join("node_modules");
+        let legacy_plugins = data_dir.join("plugins");
+        let legacy_extensions = data_dir.join("openclaw").join("extensions");
+        for scope in ["@openclaw", "@wecom", "@tencent-weixin", "@sliverp"] {
+            std::fs::create_dir_all(node_modules.join(scope)).unwrap();
+        }
+        std::fs::create_dir_all(&legacy_plugins).unwrap();
+        std::fs::create_dir_all(&legacy_extensions).unwrap();
+
+        let legacy_path = legacy_plugins.to_string_lossy().replace('\\', "/");
+        let legacy_extensions_path = legacy_extensions.to_string_lossy().replace('\\', "/");
+        let mut base = json!({
+            "plugins": { "load": { "paths": [legacy_path, legacy_extensions_path] } }
+        });
+
+        ensure_plugins_load_paths(&mut base, &node_modules);
+
+        let paths = base["plugins"]["load"]["paths"].as_array().unwrap();
+        let paths: Vec<&str> = paths.iter().filter_map(|path| path.as_str()).collect();
+        assert!(!paths.iter().any(|path| *path == legacy_path));
+        assert!(!paths.iter().any(|path| *path == legacy_extensions_path));
+        let openclaw_scope = node_modules.join("@openclaw").to_string_lossy().replace('\\', "/");
+        assert!(!paths.iter().any(|path| *path == openclaw_scope));
+        for scope in ["@wecom", "@tencent-weixin", "@sliverp"] {
+            let expected = node_modules.join(scope).to_string_lossy().replace('\\', "/");
+            assert!(paths.iter().any(|path| *path == expected));
+        }
+    }
+
+    #[test]
+    fn migrates_legacy_managed_feishu_plugin_to_active_state_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_dir = temp.path().join("openclaw");
+        let legacy_package = state_dir
+            .join("state/npm/projects/openclaw-feishu-test/node_modules/@openclaw/feishu");
+        std::fs::create_dir_all(&legacy_package).unwrap();
+        std::fs::write(legacy_package.join("package.json"), "{}").unwrap();
+
+        assert!(migrate_legacy_feishu_managed_plugin(&state_dir).unwrap());
+        let project = managed_feishu_plugin_project(&state_dir).unwrap();
+        assert!(project.ends_with("openclaw-feishu-test"));
+        assert!(!migrate_legacy_feishu_managed_plugin(&state_dir).unwrap());
     }
 
     #[test]
@@ -644,6 +751,113 @@ mod manager_agent_workspace_tests {
     }
 
     #[test]
+    fn agent_without_robot_uses_isolated_empty_workspace() {
+        let account = ManagerAccount {
+            account_id: "inst_001".to_string(),
+            agent_id: "inst_001".to_string(),
+            instance_id: "inst_001".to_string(),
+            instance_name: "Test".to_string(),
+            robot_id: None,
+            model_ref: None,
+            channel_type: "feishu".to_string(),
+        };
+
+        let workspace = agent_workspace_for_manager_account("D:/ORD/data", &account);
+
+        assert!(workspace.ends_with("openclaw/workspaces/inst_001"));
+        assert!(!workspace.contains("/robots/"));
+    }
+
+    #[test]
+    fn account_backed_feishu_removes_duplicate_root_credentials() {
+        let mut config = json!({
+            "channels": {
+                "feishu": {
+                    "enabled": true,
+                    "appId": "app",
+                    "appSecret": "secret",
+                    "accounts": { "inst_001": { "appId": "app", "appSecret": "secret" } }
+                }
+            }
+        });
+
+        super::remove_duplicate_feishu_root_credentials(&mut config);
+
+        let feishu = &config["channels"]["feishu"];
+        assert!(feishu.get("appId").is_none());
+        assert!(feishu.get("appSecret").is_none());
+        assert_eq!(feishu["accounts"]["inst_001"]["appId"], "app");
+    }
+
+    #[test]
+    fn manager_channels_use_account_scoped_direct_sessions() {
+        let mut config = json!({});
+
+        configure_manager_session_isolation(&mut config);
+
+        assert_eq!(
+            config["session"]["dmScope"],
+            "per-account-channel-peer"
+        );
+    }
+
+    #[test]
+    fn identifies_only_legacy_launcher_for_current_openclaw_bundle() {
+        let launcher = r#"D:\node\node.exe D:\kuaifanclaw\src-tauri\target\debug\data\openclaw\dist\index.js gateway --port 18789"#;
+
+        assert!(legacy_gateway_launcher_targets_openclaw_dir(
+            launcher,
+            "D:/kuaifanclaw/src-tauri/target/debug/data/openclaw"
+        ));
+        assert!(!legacy_gateway_launcher_targets_openclaw_dir(
+            launcher,
+            "D:/another-app/data/openclaw"
+        ));
+    }
+
+    #[test]
+    fn ignores_hermes_feishu_credentials_when_syncing_openclaw() {
+        let temp = tempfile::tempdir().unwrap();
+        let openclaw_dir = temp.path().join("config/modules/openclaw");
+        let hermes_dir = temp.path().join("config/modules/hermes");
+        std::fs::create_dir_all(&openclaw_dir).unwrap();
+        std::fs::create_dir_all(&hermes_dir).unwrap();
+        std::fs::write(
+            hermes_dir.join("instances.yaml"),
+            r#"
+instances:
+  - id: hermes-feishu
+    module_id: hermes
+    enabled: true
+    channel_type: feishu
+    channel_config:
+      appId: hermes-app
+      appSecret: hermes-secret
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            openclaw_dir.join("instances.yaml"),
+            r#"
+instances:
+  - id: openclaw-feishu
+    module_id: openclaw
+    enabled: true
+    channel_type: feishu
+    channel_config:
+      appId: openclaw-app
+      appSecret: openclaw-secret
+"#,
+        )
+        .unwrap();
+
+        let credentials = read_feishu_credentials_from_instances(&temp.path().to_string_lossy());
+
+        assert_eq!(credentials.0.as_deref(), Some("openclaw-app"));
+        assert_eq!(credentials.1.as_deref(), Some("openclaw-secret"));
+    }
+
+    #[test]
     fn orphan_detects_old_wecom_inst() {
         let mut cur = HashSet::new();
         cur.insert("wecom-inst_2".to_string());
@@ -658,6 +872,27 @@ mod manager_agent_workspace_tests {
         assert!(is_orphan_manager_agent_id("inst_1", &cur));
         assert!(!is_orphan_manager_agent_id("inst_2", &cur));
         assert!(!is_orphan_manager_agent_id("custom_bot", &cur));
+    }
+
+    #[test]
+    fn keeps_active_agent_workspace_when_instance_has_no_robot_id() {
+        let base = json!({
+            "agents": {
+                "list": [{
+                    "id": "inst_1784122077850",
+                    "workspace": "D:/data/robots/inst_1784122077850"
+                }]
+            }
+        });
+
+        let active = active_agent_workspace_dir_names(&base);
+
+        assert!(active.contains("inst_1784122077850"));
+        assert!(!should_cleanup_legacy_workspace_dir(
+            "inst_1784122077850",
+            &HashSet::new(),
+            &active,
+        ));
     }
 
     #[test]
@@ -831,7 +1066,8 @@ fn robot_workspace_path(data_dir: &str, robot_id: Option<&str>) -> Option<String
 fn agent_workspace_for_manager_account(data_dir: &str, acct: &ManagerAccount) -> String {
     robot_workspace_path(data_dir, acct.robot_id.as_deref()).unwrap_or_else(|| {
         PathBuf::from(data_dir)
-            .join("robots")
+            .join("openclaw")
+            .join("workspaces")
             .join(&acct.agent_id)
             .to_string_lossy()
             .replace('\\', "/")
@@ -854,7 +1090,8 @@ fn strip_invalid_keys_from_agents_list(base: &mut serde_json::Value) {
     }
 }
 
-/// 同步管理端实例的人设到机器人工作区（与 `robot.rs` 中 SOUL.md 约定一致）。
+/// 同步机器人实例的人设到其工作区。未绑定机器人的实例保持空白工作区，
+/// 仅使用 OpenClaw 的公共/内置技能，不继承其它机器人的 SOUL 或 skills。
 fn sync_agent_workspace_soul(data_dir: &str, acct: &ManagerAccount) {
     let rel_ws = agent_workspace_for_manager_account(data_dir, acct);
     if rel_ws.contains("..") {
@@ -865,11 +1102,106 @@ fn sync_agent_workspace_soul(data_dir: &str, acct: &ManagerAccount) {
         warn!("创建 agent workspace 目录失败 {:?}: {}", dir, e);
         return;
     }
-    let text = get_robot_system_prompt(acct.robot_id.as_deref().unwrap_or(""));
     let soul_path = dir.join("SOUL.md");
+    let Some(robot_id) = acct.robot_id.as_deref().filter(|id| !id.trim().is_empty()) else {
+        let _ = std::fs::remove_file(&soul_path);
+        return;
+    };
+    let text = get_robot_system_prompt(robot_id);
     if let Err(e) = std::fs::write(&soul_path, text) {
         warn!("写入 SOUL.md 失败 {:?}: {}", soul_path, e);
     }
+}
+
+/// An account-based Feishu configuration must not also have root-level
+/// credentials. OpenClaw starts a separate `default` client for those fields,
+/// which receives the same events and races the configured instance session.
+fn remove_duplicate_feishu_root_credentials(base: &mut serde_json::Value) {
+    let Some(feishu) = base
+        .get_mut("channels")
+        .and_then(|channels| channels.get_mut("feishu"))
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    let has_accounts = feishu
+        .get("accounts")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|accounts| !accounts.is_empty());
+    if has_accounts {
+        feishu.remove("appId");
+        feishu.remove("appSecret");
+    }
+}
+
+fn configure_manager_session_isolation(base: &mut serde_json::Value) {
+    let Some(root) = base.as_object_mut() else {
+        return;
+    };
+    let Some(session) = root
+        .entry("session".to_string())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    session.insert(
+        "dmScope".to_string(),
+        json!("per-account-channel-peer"),
+    );
+}
+
+fn legacy_gateway_launcher_targets_openclaw_dir(launcher: &str, openclaw_dir: &str) -> bool {
+    let normalize = |value: &str| {
+        value
+            .trim()
+            .trim_matches('"')
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+    };
+    let launcher = normalize(launcher);
+    let openclaw_dir = normalize(openclaw_dir);
+    !openclaw_dir.is_empty() && launcher.contains(&openclaw_dir)
+}
+
+#[cfg(windows)]
+fn disable_legacy_project_gateway_task(data_dir: &str) -> bool {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
+    if home.trim().is_empty() {
+        return false;
+    }
+    let launcher = PathBuf::from(home).join(".openclaw").join("gateway.cmd");
+    let Ok(contents) = std::fs::read_to_string(launcher) else {
+        return false;
+    };
+    let openclaw_dir = PathBuf::from(data_dir).join(OPENCLAW_DATA_DIR_NAME);
+    if !legacy_gateway_launcher_targets_openclaw_dir(
+        &contents,
+        &openclaw_dir.to_string_lossy(),
+    ) {
+        return false;
+    }
+
+    let _ = hidden_cmd::cmd()
+        .args(["/C", "schtasks /End /TN \"OpenClaw Gateway\""])
+        .output();
+    let disabled = hidden_cmd::cmd()
+        .args(["/C", "schtasks /Change /TN \"OpenClaw Gateway\" /Disable"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if disabled {
+        info!("已停用指向当前应用内置 OpenClaw 的遗留全局网关计划任务");
+    }
+    disabled
+}
+
+#[cfg(not(windows))]
+fn disable_legacy_project_gateway_task(_data_dir: &str) -> bool {
+    false
 }
 
 /// 已删除实例遗留的 agents.list 条目（仍在 JSON 里但不在本次 YAML 中）。
@@ -1071,6 +1403,40 @@ fn sync_feishu_channel_and_routing(data_dir: &str, base: &mut serde_json::Value)
     }
 }
 
+/// Keeps manager-created OpenClaw agents aligned with the unified default
+/// model. Instance records retain their creation-time values for other module
+/// projections, but cannot override the OpenClaw gateway selection.
+fn apply_global_model_to_manager_agents(
+    base: &mut serde_json::Value,
+    managed_agent_ids: &HashSet<String>,
+    primary: &str,
+) {
+    let primary = primary.trim();
+    if primary.is_empty() {
+        return;
+    }
+    let Some(agents) = base
+        .get_mut("agents")
+        .and_then(|agents| agents.get_mut("list"))
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+
+    for agent in agents {
+        let Some(agent_id) = agent.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !managed_agent_ids.contains(agent_id) {
+            continue;
+        }
+        let Some(agent) = agent.as_object_mut() else {
+            continue;
+        };
+        agent.insert("model".to_string(), json!({ "primary": primary }));
+    }
+}
+
 /// 删除 openclaw.json 中无效的遗留通道键（与插件注册的 channel id 不一致）。
 /// 例如：曾把 YAML channel_type 直接作为 channels 键写过，插件实际注册的 id 可能不同。
 fn remove_legacy_invalid_channel_entries(base: &mut serde_json::Value) {
@@ -1129,9 +1495,54 @@ fn sync_disable_stale_single_account_channels(
     }
 }
 
+/// 将管理端已启用实例对应的外部插件写入 `plugins.entries`。
+/// OpenClaw 使用插件 manifest 的 `id` 来启用插件，不能使用 channel id。
+fn sync_manager_channel_plugin_entries(
+    base: &mut serde_json::Value,
+    enabled_channel_ids: &HashSet<&str>,
+) {
+    let Some(root) = base.as_object_mut() else {
+        return;
+    };
+    let Some(plugins) = root
+        .entry("plugins".to_string())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    let Some(entries) = plugins
+        .entry("entries".to_string())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+
+    for (_, meta) in CHANNEL_META {
+        let Some(plugin_id) = meta.plugin_enabled_key else {
+            continue;
+        };
+        let enabled = enabled_channel_ids.contains(meta.openclaw_channel_id);
+        match entries.entry(plugin_id.to_string()) {
+            serde_json::map::Entry::Occupied(mut entry) => {
+                if let Some(config) = entry.get_mut().as_object_mut() {
+                    config.insert("enabled".to_string(), json!(enabled));
+                } else {
+                    entry.insert(json!({ "enabled": enabled }));
+                }
+            }
+            serde_json::map::Entry::Vacant(entry) if enabled => {
+                entry.insert(json!({ "enabled": true }));
+            }
+            serde_json::map::Entry::Vacant(_) => {}
+        }
+    }
+}
+
 /// 将 `plugins.entries` 的键与各插件 manifest `id` 对齐，避免网关报 plugin id mismatch。
 ///
-/// - `wecom-openclaw-plugin` / `wecom-connector` → `wecom`（bundled stub manifest id 为 "wecom"，与 channel id 同）
+/// - `wecom` / `wecom-connector` → `wecom-openclaw-plugin`
 /// - `qq` / `qq-connector` → `qqbot`（@sliverp/qqbot）
 /// - `dingtalk`（误用通道名）→ `dingtalk-connector`
 fn normalize_plugin_entries_keys(base: &mut serde_json::Value) {
@@ -1177,8 +1588,8 @@ fn normalize_plugin_entries_keys(base: &mut serde_json::Value) {
     }
 
     for (legacy, canonical) in [
-        ("wecom-openclaw-plugin", "wecom"),
-        ("wecom-connector", "wecom"),
+        ("wecom", "wecom-openclaw-plugin"),
+        ("wecom-connector", "wecom-openclaw-plugin"),
         ("qq", "qqbot"),
         ("qq-connector", "qqbot"),
     ] {
@@ -1304,7 +1715,7 @@ fn yaml_to_u16(v: &serde_yaml::Value) -> Option<u16> {
 
 /// 从 instances.yaml 读取飞书凭证 (appId, appSecret)
 fn read_feishu_credentials_from_instances(data_dir: &str) -> (Option<String>, Option<String>) {
-    let inst_path = PathBuf::from(data_dir).join("config").join("instances.yaml");
+    let inst_path = instances_yaml_path(data_dir);
     let raw = match std::fs::read_to_string(&inst_path) {
         Ok(s) => s,
         Err(_) => return (None, None),
@@ -1316,6 +1727,17 @@ fn read_feishu_credentials_from_instances(data_dir: &str) -> (Option<String>, Op
     let instances = doc.get("instances").and_then(|v| v.as_sequence());
     let Some(instances) = instances else { return (None, None); };
     for inst in instances {
+        let module_id = inst
+            .get("module_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("openclaw");
+        let enabled = inst
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        if module_id != "openclaw" || !enabled {
+            continue;
+        }
         if inst.get("channel_type").and_then(|v| v.as_str()) != Some("feishu") {
             continue;
         }
@@ -1648,6 +2070,7 @@ fn prune_stale_manager_channel_account_keys(
 
 /// 将管理端 `app.yaml` / `models.yaml` 写入 `{data_dir}/openclaw/openclaw.json`（深度合并，保留 skills 等已有字段）
 pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), String> {
+    crate::commands::instance::migrate_legacy_instances_to_modules(data_dir).await?;
     crate::commands::model::ensure_models_yaml_api_keys_are_plaintext(data_dir).await?;
 
     let openclaw_dir = PathBuf::from(data_dir).join("openclaw");
@@ -1683,7 +2106,8 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
 
     let mut patch = json!({ "gateway": gateway_patch });
 
-    if let Some(primary) = read_default_model_primary(data_dir) {
+    let default_primary = read_default_model_primary(data_dir);
+    if let Some(primary) = default_primary.as_deref() {
         merge_json_deep(
             &mut patch,
             json!({
@@ -1719,6 +2143,7 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
 
     merge_json_deep(&mut base, patch);
     remove_legacy_manager_browser_config(&mut base);
+    configure_manager_session_isolation(&mut base);
 
     // 从 models.yaml 读取所有供应商 API Key，以明文写入 openclaw.json 的 models.providers.{id}.apiKey
     inject_provider_api_keys_into_openclaw_json(&mut base, data_dir);
@@ -1790,6 +2215,14 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
         .iter()
         .map(|a| a.channel_type.as_str())
         .collect();
+    if let Some(primary) = default_primary.as_deref() {
+        let managed_agent_ids: HashSet<String> = manager_accounts
+            .iter()
+            .map(|account| account.agent_id.clone())
+            .collect();
+        apply_global_model_to_manager_agents(&mut base, &managed_agent_ids, primary);
+    }
+    sync_manager_channel_plugin_entries(&mut base, &enabled_channel_ids);
     // 遍历 CHANNEL_META：检查每个单账号通道是否有已启用实例，统一处理 enabled 的写回
     sync_disable_stale_single_account_channels(&mut base, &enabled_channel_ids);
 
@@ -1864,18 +2297,9 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
             }
         }
     }
-    // 设置 plugins.load.paths：扩展目录 + 用户插件目录（统一正斜杠，避免 Windows 混用）
-    // 飞书等通道通过 extensions/ 下的 openclaw.plugin.json 注册，必须在此路径列表中才能被发现和启动
-    let data_root = data_dir.trim_end_matches(|c| c == '/' || c == '\\').replace('\\', "/");
-    let ext_dir = format!("{}/{}/extensions", data_root, OPENCLAW_DATA_DIR_NAME);
-    let plugins_dir = format!("{}/plugins", data_root);
-    if let Some(pl) = base.get_mut("plugins") {
-        if let Some(obj) = pl.as_object_mut() {
-            obj.insert("load".to_string(), json!({"paths": [&ext_dir, &plugins_dir]}));
-        }
-    }
-    // plugins.entries 由网关自动管理，不手动写入
-    // 但网关可能产生重复条目，去重避免刷屏警告和启动延迟
+    remove_duplicate_feishu_root_credentials(&mut base);
+    // 保留上方 ensure_plugins_load_paths 写入的 npm 插件路径；不能重置为旧 data/plugins。
+    // 网关可能产生重复条目，去重避免刷屏警告和启动延迟。
     if let Some(plugins) = base.get_mut("plugins") {
         if let Some(entries) = plugins.get_mut("entries") {
             if let Some(obj) = entries.as_object_mut() {
@@ -1939,6 +2363,102 @@ pub(crate) fn resolve_gateway_http_port(data_dir: &str) -> u16 {
 fn openclaw_state_dir(data_dir: &str) -> PathBuf {
     // 直接使用 openclaw 作为状态目录，确保插件凭证路径一致
     PathBuf::from(data_dir).join("openclaw")
+}
+
+/// Return a managed npm project containing the official Feishu plugin.
+/// OpenClaw discovers these projects from `<OPENCLAW_STATE_DIR>/npm/projects`.
+fn managed_feishu_plugin_project(state_dir: &std::path::Path) -> Option<PathBuf> {
+    let projects_dir = state_dir.join("npm").join("projects");
+    let entries = std::fs::read_dir(projects_dir).ok()?;
+    entries.filter_map(Result::ok).find_map(|entry| {
+        let project = entry.path();
+        let plugin_dir = project
+            .join("node_modules")
+            .join("@openclaw")
+            .join("feishu");
+        plugin_dir.join("package.json").is_file().then_some(project)
+    })
+}
+
+/// Older builds ran the CLI with `openclaw/state` as its state root.  The
+/// gateway now uses `openclaw`, so migrate the managed plugin project instead
+/// of leaving a configured Feishu channel with no runtime plugin.
+fn migrate_legacy_feishu_managed_plugin(state_dir: &std::path::Path) -> Result<bool, String> {
+    if managed_feishu_plugin_project(state_dir).is_some() {
+        return Ok(false);
+    }
+    let legacy_state_dir = state_dir.join("state");
+    let Some(legacy_project) = managed_feishu_plugin_project(&legacy_state_dir) else {
+        return Ok(false);
+    };
+    let destination = state_dir.join("npm").join("projects").join(
+        legacy_project
+            .file_name()
+            .ok_or_else(|| "飞书插件项目目录无效".to_string())?,
+    );
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // The two state roots live on the same data volume. A rename avoids copying
+    // the plugin's deep dependency tree and Windows MAX_PATH failures.
+    std::fs::rename(&legacy_project, &destination).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+fn has_configured_feishu_account(data_dir: &str) -> bool {
+    let path = openclaw_json_path(data_dir);
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    config
+        .pointer("/channels/feishu/accounts")
+        .and_then(|accounts| accounts.as_object())
+        .is_some_and(|accounts| !accounts.is_empty())
+}
+
+/// Ensure configured Feishu accounts have the official trusted plugin in the
+/// same state directory used by the gateway process.
+fn ensure_official_feishu_plugin(data_dir: &str, state_dir: &std::path::Path) -> Result<(), String> {
+    if !has_configured_feishu_account(data_dir) {
+        return Ok(());
+    }
+    match migrate_legacy_feishu_managed_plugin(state_dir) {
+        Ok(true) => info!("已将官方飞书插件迁移到当前 OpenClaw 状态目录"),
+        Ok(false) => {}
+        Err(error) => {
+            // A currently running legacy gateway can keep the old project open
+            // on Windows. Install a fresh managed project below instead.
+            warn!("迁移旧飞书插件失败，将重新安装到当前状态目录: {}", error);
+        }
+    }
+    if managed_feishu_plugin_project(state_dir).is_some() {
+        return Ok(());
+    }
+
+    let openclaw_dir = PathBuf::from(data_dir).join("openclaw");
+    let entry = openclaw_dir.join("openclaw.mjs");
+    let (node, _) = crate::env_paths::resolve_node(data_dir);
+    let output = std::process::Command::new(node)
+        .arg(entry)
+        .args(["plugins", "install", "@openclaw/feishu", "--pin"])
+        .current_dir(&openclaw_dir)
+        .env("OPENCLAW_CONFIG_PATH", openclaw_json_path(data_dir))
+        .env("OPENCLAW_STATE_DIR", state_dir)
+        .output()
+        .map_err(|e| format!("安装官方飞书插件失败: {}", e))?;
+    if !output.status.success() || managed_feishu_plugin_project(state_dir).is_none() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "官方飞书插件安装未完成".to_string()
+        } else {
+            format!("官方飞书插件安装失败: {}", detail)
+        });
+    }
+    info!("已安装官方飞书插件到当前 OpenClaw 状态目录");
+    Ok(())
 }
 
 /// 与 [`crate::commands::model::static_provider_models`] 对齐，供 OpenClaw 控制台 `models.json` 补齐。
@@ -2297,7 +2817,11 @@ fn build_provider_model_json(provider_id: &str, e: &ProviderCatalogEntry) -> ser
 }
 
 /// 将管理端特有（OpenClaw 内置目录暂无）的模型追加到 `openclaw.json`，覆盖所有已知供应商。
-/// 确保 plugins.load.paths 包含 node_modules 的 @ 命名空间目录（绝对路径）
+/// 保留非 OpenClaw 官方通道插件的 node_modules 加载路径。
+///
+/// `data/plugins` 是旧版管理端的解压目录，其中的企业微信包曾声明不存在的
+/// `dist/esm/index.js`。保留该目录会让 OpenClaw 先发现失效包，并跳过 npm 中
+/// 已安装的官方插件。
 fn ensure_plugins_load_paths(base: &mut serde_json::Value, node_modules: &std::path::Path) {
     let mut paths: Vec<String> = base
         .pointer("/plugins/load/paths")
@@ -2305,13 +2829,50 @@ fn ensure_plugins_load_paths(base: &mut serde_json::Value, node_modules: &std::p
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
         .unwrap_or_default();
 
-    for scope in &["@openclaw", "@tencent-weixin", "@wecom"] {
+    let legacy_plugins_root = node_modules
+        .parent()
+        .and_then(|openclaw_dir| openclaw_dir.parent())
+        .map(|data_dir| data_dir.join("plugins"));
+    if let Some(legacy_plugins_root) = legacy_plugins_root {
+        let legacy_path = legacy_plugins_root.to_string_lossy().replace('\\', "/");
+        paths.retain(|path| {
+            !path
+                .trim_end_matches('/')
+                .eq_ignore_ascii_case(legacy_path.trim_end_matches('/'))
+        });
+    }
+
+    let legacy_bundled_extensions = node_modules
+        .parent()
+        .map(|openclaw_dir| openclaw_dir.join("extensions"));
+    if let Some(legacy_bundled_extensions) = legacy_bundled_extensions {
+        let legacy_path = legacy_bundled_extensions.to_string_lossy().replace('\\', "/");
+        paths.retain(|path| {
+            !path
+                .trim_end_matches('/')
+                .eq_ignore_ascii_case(legacy_path.trim_end_matches('/'))
+        });
+    }
+
+    // @openclaw/feishu is an official external plugin. Loading it directly from
+    // the application's node_modules bypasses OpenClaw's managed-install index,
+    // so its persistent dedupe store is intentionally denied. Let the official
+    // managed npm project provide this scope instead.
+    let untrusted_openclaw_scope = node_modules.join("@openclaw");
+    let untrusted_openclaw_path = untrusted_openclaw_scope
+        .to_string_lossy()
+        .replace('\\', "/");
+    paths.retain(|path| {
+        !path
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case(untrusted_openclaw_path.trim_end_matches('/'))
+    });
+
+    for scope in &["@tencent-weixin", "@wecom", "@sliverp"] {
         let p = node_modules.join(scope);
         let s = p.to_string_lossy().replace('\\', "/");
         if p.exists() && !paths.contains(&s) { paths.push(s); }
     }
-    let root = node_modules.to_string_lossy().replace('\\', "/");
-    if node_modules.exists() && !paths.contains(&root) { paths.push(root); }
 
     let plugins = base.as_object_mut().and_then(|o| o.entry("plugins".to_string()).or_insert(json!({})).as_object_mut());
     if let Some(pl) = plugins {
@@ -2382,9 +2943,10 @@ fn inject_provider_api_keys_into_openclaw_json(base: &mut serde_json::Value, dat
             });
         if let Some(obj) = provider_obj.as_object_mut() {
             obj.insert("apiKey".to_string(), json!(plain));
-            // Also set/update baseUrl if present in models.yaml
+            // The manager configuration is authoritative, including when a
+            // provider endpoint is changed after the first save.
             if let Some(base_url) = provider_val.get("base_url").and_then(|v| v.as_str()) {
-                if !base_url.is_empty() && !obj.contains_key("baseUrl") {
+                if !base_url.is_empty() {
                     obj.insert("baseUrl".to_string(), json!(base_url));
                 }
             }
@@ -2418,6 +2980,16 @@ async fn inject_kuaifan_models_from_pricing(base: &mut serde_json::Value) {
             json!({
                 "id": m.id,
                 "name": m.name,
+                "reasoning": false,
+                "input": ["text"],
+                "contextWindow": 128000,
+                "maxTokens": 8192,
+                "cost": {
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0
+                }
             })
         })
         .collect();
@@ -2883,6 +3455,11 @@ pub async fn start_gateway_with_data_dir_path(data_dir: &str) -> Result<String, 
         return Err("OpenClaw 安装不完整：缺少 openclaw.mjs".to_string());
     }
 
+    if disable_legacy_project_gateway_task(data_dir) {
+        stop_gateway_processes_best_effort(data_dir);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
     sync_openclaw_config_from_manager(data_dir).await?;
 
     // 未配置默认大模型时阻止启动：避免网关静默回退使用 Claude（或上游默认），导致用户以为已配的模型未生效。
@@ -2940,6 +3517,7 @@ pub async fn start_gateway_with_data_dir_path(data_dir: &str) -> Result<String, 
     tokio::fs::create_dir_all(&state_dir)
         .await
         .map_err(|e| format!("创建 OpenClaw 状态目录失败: {}", e))?;
+    ensure_official_feishu_plugin(data_dir, &state_dir)?;
     let state_abs = abs_path_str(&state_dir)?;
 
     let mut child =
@@ -3360,6 +3938,34 @@ pub async fn proxy_gateway_chat(
 #[cfg(test)]
 mod instance_agent_mapping_tests {
     use std::collections::HashSet;
+
+    #[test]
+    fn global_model_replaces_manager_agent_model_overrides() {
+        let mut config = serde_json::json!({
+            "agents": {
+                "list": [
+                    { "id": "inst_001", "model": { "primary": "openai/gpt-5.4" } },
+                    { "id": "wecom-inst_002", "model": { "primary": "openai/gpt-5.4" } },
+                    { "id": "custom-agent", "model": { "primary": "anthropic/claude-sonnet-4-6" } }
+                ]
+            }
+        });
+        let managed_agent_ids = HashSet::from([
+            "inst_001".to_string(),
+            "wecom-inst_002".to_string(),
+        ]);
+
+        super::apply_global_model_to_manager_agents(
+            &mut config,
+            &managed_agent_ids,
+            "kuaifan/MiniMax-M2.7",
+        );
+
+        let agents = config["agents"]["list"].as_array().unwrap();
+        assert_eq!(agents[0]["model"]["primary"], "kuaifan/MiniMax-M2.7");
+        assert_eq!(agents[1]["model"]["primary"], "kuaifan/MiniMax-M2.7");
+        assert_eq!(agents[2]["model"]["primary"], "anthropic/claude-sonnet-4-6");
+    }
 
     fn yaml_to_openclaw_ch(yaml_channel: &str) -> String {
         match yaml_channel {

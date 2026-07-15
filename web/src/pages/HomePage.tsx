@@ -13,7 +13,9 @@ import {
 import HermesPage from "./HermesPage";
 import ModuleGuiFrame from "../components/layout/ModuleGuiFrame";
 import { useAppStore } from "../stores/appStore";
+import { useModuleSessionStore } from "../stores/moduleSessionStore";
 import { useRuntimeStore } from "../stores/runtimeStore";
+import { DEFAULT_OPENCLAW_MAIN_SESSION } from "../services/moduleSessionProtocol";
 import { checkForUpdate, downloadAndInstallUpdate, type UpdateProgress } from "../utils/updater";
 
 interface GatewayStatus {
@@ -32,6 +34,9 @@ export default function HomePage() {
   const startRuntime = useRuntimeStore((state) => state.startRuntime);
   const stopRuntime = useRuntimeStore((state) => state.stopRuntime);
   const checkRuntimeHealth = useRuntimeStore((state) => state.checkRuntimeHealth);
+  const openclawSessionId = useModuleSessionStore(
+    (state) => state.activeSessionIdByModule.openclaw,
+  );
 
   const [hydrated, setHydrated] = useState(false);
   const [gatewayBusy, setGatewayBusy] = useState(false);
@@ -294,6 +299,7 @@ export default function HomePage() {
             guiUrl={openclawGuiUrl}
             running={isOnline}
             busy={gatewayBusy}
+            sessionId={openclawSessionId ?? DEFAULT_OPENCLAW_MAIN_SESSION}
             onStart={handleToggleGateway}
           />
         )}
