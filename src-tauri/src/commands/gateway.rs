@@ -618,10 +618,10 @@ mod control_ui_allowed_origins_tests {
     #[test]
     fn merges_required_origins_while_preserving_user_entries() {
         let mut base = json!({
-            "controlUi": { "allowedOrigins": ["https://proxy.example"] }
+            "gateway": { "controlUi": { "allowedOrigins": ["https://proxy.example"] } }
         });
         ensure_control_ui_allowed_origins(&mut base, 18789, &json!("loopback"));
-        let origins = base["controlUi"]["allowedOrigins"].as_array().unwrap();
+        let origins = base["gateway"]["controlUi"]["allowedOrigins"].as_array().unwrap();
         let list: Vec<String> = origins.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         assert!(list.contains(&"http://tauri.localhost".to_string()));
         assert!(list.contains(&"tauri://localhost".to_string()));
@@ -633,7 +633,7 @@ mod control_ui_allowed_origins_tests {
     fn includes_loopback_and_public_bind_loopback_hosts() {
         let mut base = json!({});
         ensure_control_ui_allowed_origins(&mut base, 18999, &json!("0.0.0.0"));
-        let list: Vec<String> = base["controlUi"]["allowedOrigins"]
+        let list: Vec<String> = base["gateway"]["controlUi"]["allowedOrigins"]
             .as_array()
             .unwrap()
             .iter()
@@ -646,7 +646,7 @@ mod control_ui_allowed_origins_tests {
     fn includes_loopback_origin_for_loopback_bind() {
         let mut base = json!({});
         ensure_control_ui_allowed_origins(&mut base, 18789, &json!("loopback"));
-        let list: Vec<String> = base["controlUi"]["allowedOrigins"]
+        let list: Vec<String> = base["gateway"]["controlUi"]["allowedOrigins"]
             .as_array()
             .unwrap()
             .iter()
@@ -2911,27 +2911,65 @@ fn ensure_control_ui_allowed_origins(base: &mut serde_json::Value, port: u16, bi
         }
     }
 
-    let control_ui = base
-        .as_object_mut()
-        .and_then(|o| o.entry("controlUi".to_string()).or_insert(json!({})).as_object_mut());
-    if let Some(cu) = control_ui {
-        let existing = cu
-            .get("allowedOrigins")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let mut merged: Vec<String> = existing.clone();
-        for value in required {
-            if !merged.contains(&value) {
-                merged.push(value);
+    // OpenClaw 0.1.9+ schema 读取 gateway.controlUi.allowedOrigins。
+    // 之前写到根级 controlUi.allowedOrigins 时，控制台依然被 1008 origin not allowed 拒掉。
+    if let Some(gw) = base.as_object_mut() {
+        let gateway = gw.entry("gateway".to_string()).or_insert(json!({}));
+        if let Some(g) = gateway.as_object_mut() {
+            let control_ui = g.entry("controlUi".to_string()).or_insert(json!({}));
+            if let Some(cu) = control_ui.as_object_mut() {
+                let existing = cu
+                    .get("allowedOrigins")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let mut merged: Vec<String> = existing.clone();
+                for value in required {
+                    if !merged.contains(&value) {
+                        merged.push(value);
+                    }
+                }
+                cu.insert("allowedOrigins".to_string(), json!(merged));
             }
         }
-        cu.insert("allowedOrigins".to_string(), json!(merged));
     }
+
+}
+
+
+/// CLI 辅助：仅刷新 openclaw.json 的 gateway.controlUi.allowedOrigins 字段。
+/// 不走网络拉取模型 / 完整 sync_openclaw_config_from_manager，避免冷启动回归脚本阻塞。
+pub fn ensure_control_ui_origins_only(data_dir: &str) -> Result<usize, String> {
+    use std::io::Write;
+    let cfg_path = openclaw_json_path(data_dir);
+    let raw = std::fs::read_to_string(&cfg_path)
+        .map_err(|e| format!("read openclaw.json: {}", e))?;
+    let mut base: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
+    let (port, _token, host) = read_app_gateway_from_yaml(data_dir);
+    let (bind, _custom_host) = gateway_bind_from_host(&host);
+    ensure_control_ui_allowed_origins(&mut base, port, &bind);
+    let count = base
+        .pointer("/gateway/controlUi/allowedOrigins")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let pretty = serde_json::to_string_pretty(&base)
+        .map_err(|e| format!("serialize: {}", e))?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&cfg_path)
+        .map_err(|e| format!("open: {}", e))?;
+    file.write_all(pretty.as_bytes())
+        .map_err(|e| format!("write: {}", e))?;
+    file.sync_all().map_err(|e| format!("sync: {}", e))?;
+    Ok(count)
 }
 
 fn ensure_plugins_load_paths(base: &mut serde_json::Value, node_modules: &std::path::Path) {
@@ -4648,3 +4686,7 @@ instances:
     }
 
 }
+
+
+
+

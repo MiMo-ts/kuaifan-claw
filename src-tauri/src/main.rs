@@ -3,7 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bundled_env;
-mod commands;
+pub mod commands;
 pub mod env_paths;
 pub mod mirror;
 mod models;
@@ -431,7 +431,40 @@ fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
     Ok(())
 }
 
+
+
+#[allow(dead_code)]
+fn run_cli_ensure_control_ui_origins(data_dir: &str) -> i32 {
+    use std::io::Write;
+    match crate::commands::gateway::ensure_control_ui_origins_only(data_dir) {
+        Ok(count) => {
+            println!("ensure_control_ui_origins_only OK: {} origins written", count);
+            let _ = std::io::stdout().flush();
+            0
+        }
+        Err(e) => {
+            eprintln!("ensure_control_ui_origins_only FAILED: {}", e);
+            let _ = std::io::stderr().flush();
+            2
+        }
+    }
+}
 fn main() {
+    // CLI �������� Tauri ����������ǰ�����ع�ű������������
+    {
+        let mut iter = std::env::args().skip(1);
+        let mut data_dir: Option<String> = None;
+        while let Some(a) = iter.next() {
+            if a == "--ensure-control-ui-origins" {
+                data_dir = iter.next();
+                break;
+            }
+        }
+        if let Some(data_dir) = data_dir {
+            std::process::exit(run_cli_ensure_control_ui_origins(&data_dir));
+        }
+    }
+
     // 
     write_diagnostic_file(
         "start.log",
@@ -807,3 +840,4 @@ fn main() {
             std::process::exit(1);
         });
 }
+
