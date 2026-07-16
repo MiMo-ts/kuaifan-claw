@@ -996,7 +996,13 @@ pub async fn install_hermes_runtime(
     // Step 2: 解压 hermes-agent.zip (~12MB)
     let hermes_zip = bundled_dir.join("hermes-agent.zip");
     if hermes_zip.is_file() {
-        if !runtime_dir.join("hermes_cli").join("main.py").exists() {
+        let version_marker = runtime_dir.join(".bundle_version");
+        let existing_version = if version_marker.is_file() {
+            std::fs::read_to_string(&version_marker).unwrap_or_default().trim().to_string()
+        } else { String::new() };
+        let needs_extract = !runtime_dir.join("hermes_cli").join("main.py").exists()
+            || existing_version != "0.18.2";
+        if needs_extract {
             emit("hermes-agent", "started", Some(50.0), "正在解压 Hermes Agent v0.18.2 (12MB)...");
             let data = std::fs::read(&hermes_zip).map_err(|e| format!("读取 hermes-agent.zip: {}", e))?;
             let cursor = std::io::Cursor::new(data);
@@ -1018,6 +1024,9 @@ pub async fn install_hermes_runtime(
                 }
             }
             emit("hermes-agent", "finished", Some(95.0), "Hermes Agent 解压完成");
+
+            // 写入版本标记：下次安装若标记与本版本一致且 main.py 仍在则跳过解压。
+            let _ = std::fs::write(&version_marker, "0.18.2\n");
         } else {
             emit("hermes-agent", "finished", Some(95.0), "Hermes Agent 已存在，跳过解压");
         }

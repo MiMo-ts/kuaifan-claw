@@ -24,6 +24,8 @@ import {
 
 const RPC_TIMEOUT_MS = 30_000;
 
+const HERMES_DASHBOARD_SESSION_TOKEN = "kfc-desk-3463b6e3f34d0f12fc416939e9a81fc395f40f4730cfc145";
+
 type RpcResult = Record<string, any>;
 type StreamListener = (event: HermesStreamEvent) => void;
 
@@ -441,24 +443,14 @@ export class HermesApiClient {
   private async getSessionToken(): Promise<string> {
     if (this.sessionToken !== null) return this.sessionToken;
 
-    const injected = (window as typeof window & {
-      __HERMES_SESSION_TOKEN__?: string;
-    }).__HERMES_SESSION_TOKEN__;
-    if (injected) {
-      this.sessionToken = injected;
-      return injected;
-    }
-
-    const response = await fetch(`${this.baseUrl}/`, {
-      cache: "no-store",
-      credentials: "include",
-    });
-    if (!response.ok) {
-      throw new HermesApiError(`Hermes dashboard returned ${response.status}`);
-    }
-    const html = await response.text();
-    const match = html.match(/__HERMES_SESSION_TOKEN__="([^"]+)"/);
-    this.sessionToken = match?.[1] ?? "";
+    // 1. The desktop shell mints `HERMES_DASHBOARD_SESSION_TOKEN` via
+    //    `runtime.json` and passes it to the Hermes process. The Hermes
+    //    dashboard reads it as `_SESSION_TOKEN` and expects every HTTP
+    //    request to carry it as `X-Hermes-Session-Token` (REST) or
+    //    `?token=` (WebSocket). Use the same value here so the embedded
+    //    Tauri WebView can talk to the loopback dashboard without loading
+    //    the dashboard's HTML.
+    this.sessionToken = HERMES_DASHBOARD_SESSION_TOKEN;
     return this.sessionToken;
   }
 

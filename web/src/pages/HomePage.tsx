@@ -37,6 +37,7 @@ export default function HomePage() {
   const openclawSessionId = useModuleSessionStore(
     (state) => state.activeSessionIdByModule.openclaw,
   );
+  const moduleSessionsHydrated = useModuleSessionStore((state) => state.hydrated);
 
   const [hydrated, setHydrated] = useState(false);
   const [gatewayBusy, setGatewayBusy] = useState(false);
@@ -299,7 +300,7 @@ export default function HomePage() {
             guiUrl={openclawGuiUrl}
             running={isOnline}
             busy={gatewayBusy}
-            sessionId={openclawSessionId ?? DEFAULT_OPENCLAW_MAIN_SESSION}
+            sessionId={moduleSessionsHydrated ? (openclawSessionId ?? DEFAULT_OPENCLAW_MAIN_SESSION) : DEFAULT_OPENCLAW_MAIN_SESSION}
             onStart={handleToggleGateway}
           />
         )}

@@ -22,9 +22,16 @@ import {
   CxIconWifi,
 } from "../icons";
 import LanDevicePanel from "../LanDevicePanel";
-import { useThreadStore } from "../../stores/threadStore";
 import { useAppStore } from "../../stores/appStore";
-import { GatewayClient, type SessionEntry } from "../../services/gatewayClient";
+import { useRuntimeStore } from "../../stores/runtimeStore";
+import { useModuleSessionStore } from "../../stores/moduleSessionStore";
+import {
+  createModuleSession,
+  deleteModuleSession,
+  listModuleSessions,
+  renameModuleSession,
+} from "../../services/moduleSessions";
+import type { ModuleSession } from "../../services/moduleSessionProtocol";
 
 export interface SidebarNavItem {
   key: string;
@@ -143,15 +150,26 @@ interface CodexSidebarProps {
 export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: CodexSidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const threads = useThreadStore((s) => s.threads);
-  const activeThreadId = useThreadStore((s) => s.activeThreadId);
+  const activeModule = useAppStore((s) => s.activeModule);
+  const openclawGatewayRunning = useAppStore((s) => s.gatewayRunning);
+  const runtimes = useRuntimeStore((s) => s.runtimes);
+  const sessions = useModuleSessionStore((s) => s.sessionsByModule[activeModule]);
+  const activeSessionId = useModuleSessionStore((s) => s.activeSessionIdByModule[activeModule]);
+  const setSessions = useModuleSessionStore((s) => s.setSessions);
+  const setActiveSession = useModuleSessionStore((s) => s.setActiveSession);
+  const removeSession = useModuleSessionStore((s) => s.removeSession);
+  const upsertSession = useModuleSessionStore((s) => s.upsertSession);
+  const hydrated = useModuleSessionStore((s) => s.hydrated);
   const [search, setSearch] = useState("");
-  const [gwSessions, setGwSessions] = useState<SessionEntry[]>([]);
-  const [gwConnected, setGwConnected] = useState(false);
   const [nameEditing, setNameEditing] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [collapsed, setCollapsed] = useState(false);
   const [showLan, setShowLan] = useState(false);
+  const hermesRuntime = runtimes.find((runtime) => runtime.id === "hermes");
+  const moduleGuiUrl = activeModule === "hermes" ? hermesRuntime?.guiUrl ?? null : null;
+  const moduleRunning = activeModule === "hermes"
+    ? Boolean(hermesRuntime?.running)
+    : Boolean(gatewayRunning ?? openclawGatewayRunning);
 
   const current =
     activeKey ??
@@ -172,77 +190,75 @@ export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: 
   };
 
   // 鈹€鈹€ Gateway session sync 鈹€鈹€
-  const syncSessions = useCallback(async (gw: GatewayClient) => {
+  const syncSessions = useCallback(async () => {
+    if (!hydrated) return;
     try {
-      const sessions = await gw.listSessions({ limit: 200, includeDerivedTitles: true, includeLastMessage: true });
-      const ours = sessions.filter((s) => s.key.startsWith("kuaifan-"));
-      setGwSessions(ours);
-      useThreadStore.getState().syncFromGateway(
-        ours.map((s) => ({
-          key: s.key,
-          sessionId: s.sessionId,
-          label: s.label || s.origin?.label,
-          updatedAt: s.updatedAt,
-        }))
-      );
+      const next = await listModuleSessions(activeModule, moduleGuiUrl);
+      if (next.length === 0) return; // remote empty: keep local persisted list
+      setSessions(activeModule, next);
     } catch {
-      /* gateway not ready */
+      // Gateway may still be starting. Keep the last module-owned session snapshot.
     }
-  }, []);
+  }, [activeModule, hydrated, moduleGuiUrl, setSessions]);
 
   useEffect(() => {
-    if (!gatewayRunning) {
-      setGwConnected(false);
-      return;
-    }
-    let gw: GatewayClient | null = null;
-    let cancelled = false;
-    (async () => {
-      try {
-        gw = await GatewayClient.create();
-        gw.onConnected = () => {
-          if (!cancelled) {
-            setGwConnected(true);
-            syncSessions(gw!);
-          }
-        };
-        gw.connect();
-      } catch {
-        /* */
-      }
-    })();
-    return () => {
-      cancelled = true;
-      gw?.close();
-    };
-  }, [gatewayRunning, syncSessions]);
+    if (!moduleRunning || !hydrated) return;
+    void syncSessions();
+    const timer = window.setInterval(() => void syncSessions(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [moduleRunning, hydrated, syncSessions]);
 
   // 鈹€鈹€ Actions 鈹€鈹€
   const handleNewThread = async () => {
-    useThreadStore.getState().createThread();
+    navigate("/home");
+    if (!moduleRunning) {
+      window.alert("请先启动当前模块网关");
+      return;
+    }
+    try {
+      const session = await createModuleSession(activeModule, moduleGuiUrl);
+      upsertSession(activeModule, session);
+      setActiveSession(activeModule, session.id);
+      // Trigger an immediate sync so the gateway-side title / lastMessage
+      // are folded back into the local snapshot without waiting 5s.
+      void syncSessions();
+    } catch (error) {
+      window.alert(`创建会话失败：${String(error)}`);
+    }
+  };
+
+  const handleThreadClick = (sessionId: string) => {
+    setActiveSession(activeModule, sessionId);
     navigate("/home");
   };
 
-  const handleThreadClick = (threadId: string) => {
-    useThreadStore.getState().setActiveThread(threadId);
-    navigate("/home");
-  };
-
-  const handleDeleteThread = async (e: React.MouseEvent, t: typeof threads[0]) => {
+  const handleDeleteThread = async (e: React.MouseEvent, t: ModuleSession) => {
     e.stopPropagation();
     const ok = window.confirm(`删除会话 “${t.title}” ？`);
     if (!ok) return;
-    useThreadStore.getState().removeThread(t.id);
+    try {
+      await deleteModuleSession(activeModule, t.id, moduleGuiUrl);
+      removeSession(activeModule, t.id);
+    } catch (error) {
+      window.alert(`删除会话失败：${String(error)}`);
+    }
   };
 
-  const handleRenameStart = (t: typeof threads[0]) => {
+  const handleRenameStart = (t: ModuleSession) => {
     setNameEditing(t.id);
     setEditValue(t.title);
   };
 
-  const handleRenameSubmit = (t: typeof threads[0]) => {
+  const handleRenameSubmit = async (t: ModuleSession) => {
     const v = editValue.trim();
-    if (v && v !== t.title) useThreadStore.getState().updateThread(t.id, { title: v });
+    if (v && v !== t.title) {
+      try {
+        await renameModuleSession(activeModule, t.id, v, moduleGuiUrl);
+        upsertSession(activeModule, { ...t, title: v });
+      } catch (error) {
+        window.alert(`重命名会话失败：${String(error)}`);
+      }
+    }
     setNameEditing(null);
   };
 
@@ -258,7 +274,7 @@ export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: 
     window.location.reload();
   };
 
-  const filteredThreads = threads.filter((t) =>
+  const filteredThreads = sessions.filter((t) =>
     !search.trim() ? true : t.title.toLowerCase().includes(search.trim().toLowerCase())
   );
 
@@ -385,7 +401,7 @@ export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: 
               color: "var(--cx-text-mute)",
             }}
           >
-            {threads.length}
+            {sessions.length}
           </span>
         </div>
         <div
@@ -428,7 +444,7 @@ export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: 
         {/* Thread list */}
         <div className="space-y-0.5 px-3 pb-3">
           {filteredThreads.map((t) => {
-            const isActive = t.id === activeThreadId;
+            const isActive = t.id === activeSessionId;
             return (
               <div key={t.id} className="relative group">
                 <button
@@ -532,7 +548,7 @@ export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: 
             );
           })}
 
-          {threads.length === 0 && (
+          {sessions.length === 0 && (
             <div
               className="flex flex-col items-center justify-center text-center py-6 px-2 rounded-lg"
               style={{

@@ -55,6 +55,7 @@ pnpm-debug.log*
 *.snap
 *.flatpak
 *.zip
+!src-tauri/bundled-hermes/*.zip
 !src-tauri/bundled-openclaw/openclaw.tgz
 *.tar.bz2
 

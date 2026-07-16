@@ -120,11 +120,15 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
   const [liveProgress, setLiveProgress] = useState<ProgressEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [installed, setInstalled] = useState(false);
+  // Hermes 自己的安装态：与 OpenClaw CN 的 `fullyReady` 解耦，避免出现
+  // "OpenClaw 装好后 Hermes 视图误显示已安装" 的问题。
+  const [hermesInstalled, setHermesInstalled] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [cnStatus, setCnStatus] = useState<OpenClawCnStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const activeModule = useAppStore((s) => s.activeModule);
 
   const refreshCnStatus = useCallback(() => {
     setStatusLoading(true);
@@ -190,6 +194,20 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
   useEffect(() => {
     refreshCnStatus();
   }, [refreshCnStatus]);
+
+  // Hermes 视图进入时，按 data/runtimes/hermes 真实文件状态刷新一次。
+  useEffect(() => {
+    if (activeModule !== "hermes") return;
+    let cancelled = false;
+    invoke<{ installed: boolean }>("check_hermes_bundled")
+      .then((r) => {
+        if (!cancelled) setHermesInstalled(Boolean(r?.installed));
+      })
+      .catch(() => {
+        if (!cancelled) setHermesInstalled(false);
+      });
+    return () => { cancelled = true; };
+  }, [activeModule]);
 
   useEffect(() => {
     const onBridge = (e: Event) => {
@@ -317,7 +335,6 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
     : liveProgress?.percent ?? 0;
 
   // ── Hermes 安装视图 ──
-  const activeModule = useAppStore((s) => s.activeModule);
   if (activeModule === "hermes") {
     return (
       <div className="space-y-6">
@@ -334,7 +351,7 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
           )}
         </div>
 
-        {!installed && !installing && (
+        {!hermesInstalled && !installing && (
           <div className="flex justify-center">
             <button
               type="button"
@@ -344,7 +361,10 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
                 setLogs([]);
                 try {
                   await invoke("install_hermes_runtime");
-                  setInstalled(true);
+                  // 用真实文件状态覆盖乐观值，避免解压失败却被标记为已装。
+                  const probe = await invoke<{ installed: boolean }>("check_hermes_bundled");
+                  setHermesInstalled(Boolean(probe?.installed));
+                  setInstalled(Boolean(probe?.installed));
                   setLogs((prev) => [...prev, `[${logTime()}] Hermes Agent 安装完成`]);
                 } catch (e: any) {
                   setError(String(e?.message || e));
@@ -368,7 +388,7 @@ export default function OpenClawInstall({ onNext, onPrev }: Props) {
           </div>
         )}
 
-        {installed && (
+        {hermesInstalled && (
           <div className="text-center space-y-3">
             <div className="flex items-center justify-center gap-2 text-green-600">
               <CxIconCheckCircle className="w-5 h-5" />
