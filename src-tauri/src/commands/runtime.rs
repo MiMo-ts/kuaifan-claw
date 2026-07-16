@@ -331,9 +331,112 @@ pub(crate) fn runtime_log_path(data_dir: &str, runtime_id: &str) -> PathBuf {
     runtimes_dir(data_dir).join(runtime_id).join(format!("{}_runtime.log", runtime_id))
 }
 
+/// 探测运行时是否已在外部启动（端口 + 版本校验）
+///
+/// 在 Tauri 应用重启时，原有内存状态已清空，但 runtime 进程可能仍在监听端口。
+/// 通过 TCP 连接 + /api/status 版本校验，可识别并复用这些进程，避免重复启动。
+async fn probe_existing_runtime(manifest: &RuntimeManifest, gui_port: u16) -> Option<(u32, u64)> {
+    info!("probe: 开始探测 {} 端口 {}", manifest.id, gui_port);
+    // 1. TCP 端口快速探测
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", gui_port).parse().ok()?;
+    if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_err() {
+        info!("probe: TCP 端口 {} 连接失败", gui_port);
+        return None;
+    }
+
+    // 2. /api/status 健康校验 + 版本匹配
+    let health_url = manifest
+        .launch
+        .health_url
+        .replace("{guiPort}", &gui_port.to_string());
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let resp = match client.get(&health_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            info!("probe: /api/status 请求失败: {}", e);
+            return None;
+        },
+    };
+    if !resp.status().is_success() {
+        info!("probe: /api/status 状态码非 2xx: {}", resp.status());
+        return None;
+    }
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            info!("probe: /api/status JSON 解析失败: {}", e);
+            return None;
+        },
+    };
+    let remote_version = body.get("version").and_then(|v| v.as_str()).unwrap_or("");
+    if remote_version.is_empty() {
+        return None;
+    }
+    if remote_version != manifest.version {
+        warn!(
+            "{} 端口 {} 上的服务版本不匹配 (本地={}, 远端={})",
+            manifest.id, gui_port, manifest.version, remote_version
+        );
+        return None;
+    }
+
+    // 3. 通过 PowerShell 查找监听该端口的进程 PID
+    let pid = match find_listener_pid(gui_port) {
+        Some(p) => p,
+        None => {
+            info!("probe: 未找到监听端口 {} 的进程 PID", gui_port);
+            return None;
+        },
+    };
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    info!(
+        "{} 已在外部运行，端口={} pid={}",
+        manifest.id, gui_port, pid
+    );
+    Some((pid, started_at))
+}
+
+#[cfg(windows)]
+fn find_listener_pid(port: u16) -> Option<u32> {
+    let script = format!(
+        "$owners = Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; foreach ($owner in $owners) {{ Write-Output $owner }}"
+    );
+    let output = crate::commands::hidden_cmd::powershell()
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Ok(pid) = trimmed.parse::<u32>() {
+            if pid > 0 {
+                return Some(pid);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn find_listener_pid(_port: u16) -> Option<u32> {
+    None
+}
+
 /// 扫描 runtimes/ 目录下所有 runtime.json
 #[tauri::command]
-pub fn scan_runtimes(data_dir: tauri::State<'_, crate::AppState>) -> Result<Vec<RuntimeInstance>, String> {
+pub async fn scan_runtimes(data_dir: tauri::State<'_, crate::AppState>) -> Result<Vec<RuntimeInstance>, String> {
     let data_base = data_dir.inner().get_data_dir();
     let dir = runtimes_dir(&data_base);
     info!("扫描运行时目录: {}", dir.display());
@@ -375,6 +478,12 @@ pub fn scan_runtimes(data_dir: tauri::State<'_, crate::AppState>) -> Result<Vec<
         let gui_port = manifest.ports.gui.default;
         let gateway_port = manifest.ports.gateway.default;
 
+        // 探测端口/版本，识别已外部启动的 runtime
+        let (running, pid, started_at) = match probe_existing_runtime(&manifest, gui_port).await {
+            Some((p, t)) => (true, Some(p), Some(t)),
+            None => (false, None, None),
+        };
+
         let instance = RuntimeInstance {
             id: manifest.id.clone(),
             name: manifest.name,
@@ -387,9 +496,9 @@ pub fn scan_runtimes(data_dir: tauri::State<'_, crate::AppState>) -> Result<Vec<
             gui_url: manifest.gui.url_template.replace("{guiPort}", &gui_port.to_string()),
             gui_port,
             gateway_port,
-            running: false,
-            pid: None,
-            started_at: None,
+            running,
+            pid,
+            started_at,
         };
 
         instances.push(instance);
@@ -411,8 +520,8 @@ pub fn scan_runtimes(data_dir: tauri::State<'_, crate::AppState>) -> Result<Vec<
 
 /// 获取所有运行时及其运行状态
 #[tauri::command]
-pub fn get_runtime_list(data_dir: tauri::State<'_, crate::AppState>) -> Result<Vec<RuntimeInstance>, String> {
-    let mut instances = scan_runtimes(data_dir)?;
+pub async fn get_runtime_list(data_dir: tauri::State<'_, crate::AppState>) -> Result<Vec<RuntimeInstance>, String> {
+    let mut instances = scan_runtimes(data_dir).await?;
 
     // 同步运行状态
     ensure_state();
@@ -765,19 +874,33 @@ pub async fn stop_runtime(
     runtime_id: String,
 ) -> Result<(), String> {
     ensure_state();
-    let mut state = get_state();
-    if let Some(ref mut s) = *state {
-        if let Some(mut child) = s.processes.remove(&runtime_id) {
-            info!("停止运行时: {}", runtime_id);
-            let _ = child.kill();
-            let _ = child.wait();
+    let mut external_pid: Option<u32> = None;
+    {
+        let mut state = get_state();
+        if let Some(ref mut s) = *state {
+            if let Some(mut child) = s.processes.remove(&runtime_id) {
+                info!("停止运行时: {} (本进程)", runtime_id);
+                let _ = child.kill();
+                let _ = child.wait();
+            } else if let Some(inst) = s.instances.get(&runtime_id) {
+                // 外部启动的 runtime：按 PID 终止
+                if let Some(pid) = inst.pid {
+                    external_pid = Some(pid);
+                }
+            }
+            s.module_ports.remove(&runtime_id);
+            if let Some(inst) = s.instances.get_mut(&runtime_id) {
+                inst.running = false;
+                inst.pid = None;
+                inst.started_at = None;
+            }
         }
-        s.module_ports.remove(&runtime_id);
-        if let Some(inst) = s.instances.get_mut(&runtime_id) {
-            inst.running = false;
-            inst.pid = None;
-            inst.started_at = None;
-        }
+    }
+    if let Some(pid) = external_pid {
+        info!("停止运行时: {} (外部进程 PID={})", runtime_id, pid);
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F", "/T"])
+            .output();
     }
     Ok(())
 }
