@@ -16,6 +16,188 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x08000000;
 
+const HERMES_DESKTOP_SESSION_TOKEN: &str = "kfc-desk-3463b6e3f34d0f12fc416939e9a81fc395f40f4730cfc145";
+const HERMES_BROWSER_BUNDLE_VERSION: &str = "3";
+const HERMES_AGENT_VERSION: &str = "0.18.2-kfc.3";
+
+fn hermes_agent_bundle_marker() -> String {
+    format!("{}|kuaifanclaw-{}", HERMES_AGENT_VERSION, env!("CARGO_PKG_VERSION"))
+}
+
+fn hermes_agent_bundle_needs_refresh(runtime_dir: &std::path::Path, expected_marker: &str) -> bool {
+    let entrypoint = runtime_dir.join("hermes_cli").join("main.py");
+    let existing_marker = std::fs::read_to_string(runtime_dir.join(".bundle_version"))
+        .unwrap_or_default();
+    !entrypoint.is_file() || existing_marker.trim() != expected_marker
+}
+
+fn hermes_home_dir(data_base: &str) -> PathBuf {
+    PathBuf::from(data_base).join("modules").join("hermes")
+}
+
+fn hermes_browser_executable_path(home: &std::path::Path) -> Option<PathBuf> {
+    let browser_root = home.join("ms-playwright");
+    let entries = std::fs::read_dir(browser_root).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if !name.starts_with("chromium_headless_shell-") && !name.starts_with("chromium-") {
+            continue;
+        }
+        for relative in [
+            "chrome-headless-shell-win64/chrome-headless-shell.exe",
+            "chrome-win64/chrome.exe",
+        ] {
+            let candidate = entry.path().join(relative);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn hermes_browser_home_is_ready(home: &std::path::Path) -> bool {
+    home.join("node").join("node.exe").is_file()
+        && home.join("node_modules").join(".bin").join("agent-browser.cmd").is_file()
+        && hermes_browser_executable_path(home).is_some()
+}
+
+fn configure_hermes_browser_environment(
+    command: &mut Command,
+    hermes_home: &std::path::Path,
+) -> Result<(), String> {
+    let browser_bin_dir = hermes_home.join("node_modules").join(".bin");
+    let node_dir = hermes_home.join("node");
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(node_dir)
+            .chain(std::iter::once(browser_bin_dir))
+            .chain(std::env::split_paths(&existing_path)),
+    )
+    .map_err(|error| format!("build Hermes browser PATH: {}", error))?;
+    let browser_executable = hermes_browser_executable_path(hermes_home)
+        .ok_or_else(|| "Hermes offline Chromium executable is missing".to_string())?;
+
+    command
+        .env("HERMES_HOME", hermes_home)
+        .env("PATH", path)
+        .env("PLAYWRIGHT_BROWSERS_PATH", hermes_home.join("ms-playwright"))
+        .env("AGENT_BROWSER_EXECUTABLE_PATH", browser_executable)
+        .env("HERMES_OFFLINE_BROWSER", "1");
+    Ok(())
+}
+
+fn bundled_hermes_dir_candidates() -> [PathBuf; 3] {
+    [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bundled-hermes"),
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|parent| parent.join("bundled-hermes")))
+            .unwrap_or_default(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|parent| parent.join("resources").join("bundled-hermes")))
+            .unwrap_or_default(),
+    ]
+}
+
+fn extract_hermes_bundle(zip_path: &std::path::Path, target_dir: &std::path::Path) -> Result<(), String> {
+    let data = std::fs::read(zip_path)
+        .map_err(|error| format!("read Hermes bundle {}: {}", zip_path.display(), error))?;
+    let cursor = std::io::Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|error| format!("open Hermes bundle {}: {}", zip_path.display(), error))?;
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|error| format!("read Hermes bundle entry {}: {}", index, error))?;
+        let path = target_dir.join(file.mangled_name());
+        if file.is_dir() {
+            std::fs::create_dir_all(&path)
+                .map_err(|error| format!("create Hermes bundle directory {}: {}", path.display(), error))?;
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("create Hermes bundle directory {}: {}", parent.display(), error))?;
+        }
+        let mut output = std::fs::File::create(&path)
+            .map_err(|error| format!("create Hermes bundle file {}: {}", path.display(), error))?;
+        std::io::copy(&mut file, &mut output)
+            .map_err(|error| format!("extract Hermes bundle file {}: {}", path.display(), error))?;
+    }
+    Ok(())
+}
+
+fn refresh_hermes_agent_bundle(runtime_dir: &std::path::Path) -> Result<bool, String> {
+    let expected_marker = hermes_agent_bundle_marker();
+    if !hermes_agent_bundle_needs_refresh(runtime_dir, &expected_marker) {
+        return Ok(false);
+    }
+
+    let bundle_path = bundled_hermes_dir_candidates()
+        .into_iter()
+        .map(|dir| dir.join("hermes-agent.zip"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| "Hermes runtime bundle is missing: hermes-agent.zip".to_string())?;
+
+    std::fs::create_dir_all(runtime_dir)
+        .map_err(|error| format!("create Hermes runtime {}: {}", runtime_dir.display(), error))?;
+    extract_hermes_bundle(&bundle_path, runtime_dir)?;
+    std::fs::write(runtime_dir.join(".bundle_version"), format!("{}\n", expected_marker))
+        .map_err(|error| format!("write Hermes runtime version marker: {}", error))?;
+    Ok(true)
+}
+
+
+// Write a real agent-browser.cmd shim that delegates to the bundled Python
+// + tools/cdp_browser_cli.py. The relative path keeps cmd.exe from
+// mis-decoding a Chinese installation path written by Rust as UTF-8.
+fn write_agent_browser_shim(runtime_dir: &std::path::Path, home: &std::path::Path) -> std::io::Result<()> {
+    let shim_dir = home.join("node_modules").join(".bin");
+    std::fs::create_dir_all(&shim_dir)?;
+    let shim_path = shim_dir.join("agent-browser.cmd");
+    let py = runtime_dir.join("python").join("python.exe");
+    let cli = runtime_dir.join("tools").join("cdp_browser_cli.py");
+    if !py.is_file() || !cli.is_file() {
+        return Ok(()); // runtime not extracted yet; will retry next install
+    }
+    let body = "@ECHO off\r\nREM kuaifanclaw Hermes bundled agent-browser shim.\r\nREM Resolve the sibling runtime from this file so Chinese install paths\r\nREM never need to be encoded into the batch source.\r\nset \"KFC_HERMES_RUNTIME=%~dp0..\\..\\..\\..\\runtimes\\hermes\"\r\n\"%KFC_HERMES_RUNTIME%\\python\\python.exe\" \"%KFC_HERMES_RUNTIME%\\tools\\cdp_browser_cli.py\" %*\r\nexit /b %ERRORLEVEL%\r\n";
+    std::fs::write(&shim_path, body)
+}
+
+fn ensure_hermes_browser_home(data_base: &str) -> Result<PathBuf, String> {
+    let home = hermes_home_dir(data_base);
+    let runtime_dir = std::path::PathBuf::from(data_base).join("runtimes").join("hermes");
+    let marker_path = home.join(".browser_bundle_version");
+    let installed_version = std::fs::read_to_string(&marker_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if installed_version == HERMES_BROWSER_BUNDLE_VERSION && hermes_browser_home_is_ready(&home) {
+        write_agent_browser_shim(&runtime_dir, &home)
+            .map_err(|error| format!("refresh Hermes browser shim: {}", error))?;
+        return Ok(home);
+    }
+
+    let bundle_path = bundled_hermes_dir_candidates()
+        .into_iter()
+        .map(|dir| dir.join("hermes-browser.zip"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| "Hermes offline browser bundle is missing: hermes-browser.zip".to_string())?;
+    std::fs::create_dir_all(&home)
+        .map_err(|error| format!("create Hermes home {}: {}", home.display(), error))?;
+    extract_hermes_bundle(&bundle_path, &home)?;
+    if !hermes_browser_home_is_ready(&home) {
+        return Err("Hermes offline browser bundle is incomplete after extraction".to_string());
+    }
+    std::fs::write(&marker_path, format!("{}\n", HERMES_BROWSER_BUNDLE_VERSION))
+        .map_err(|error| format!("write Hermes browser version marker: {}", error))?;
+    write_agent_browser_shim(&runtime_dir, &home)
+        .map_err(|error| format!("write Hermes browser shim: {}", error))?;
+    Ok(home)
+}
+
 fn hermes_provider_api_key_env_var(provider: &str) -> Option<&'static str> {
     match provider.to_ascii_lowercase().as_str() {
         "openai" => Some("OPENAI_API_KEY"),
@@ -123,6 +305,10 @@ pub struct RuntimeManifest {
     requires: Option<RuntimeRequires>,
 }
 
+fn parse_runtime_manifest(content: &str) -> Result<RuntimeManifest, serde_json::Error> {
+    serde_json::from_str(content.strip_prefix('\u{feff}').unwrap_or(content))
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
 struct RuntimeRequires {
     #[serde(default)]
@@ -161,6 +347,7 @@ pub struct RuntimeInstance {
 struct RuntimeState {
     instances: HashMap<String, RuntimeInstance>,
     processes: HashMap<String, Child>,
+    sidecar_processes: HashMap<String, Child>,
     /// 模块指定端口 (由前端设置)
     module_ports: HashMap<String, (u16, u16)>, // id -> (gui_port, gateway_port)
 }
@@ -262,6 +449,295 @@ mod hermes_runtime_tests {
             &runtime_dir,
         ));
     }
+
+    #[test]
+    fn parses_manifest_with_utf8_bom() {
+        let manifest = parse_runtime_manifest("\u{feff}{\"id\":\"hermes\",\"name\":\"Hermes\",\"description\":\"\",\"version\":\"0\",\"category\":\"agent\",\"icon\":\"\",\"launch\":{\"command\":\"\",\"args\":[],\"cwd\":\".\",\"healthUrl\":\"\",\"readyTimeoutMs\":0},\"gui\":{\"type\":\"web\",\"urlTemplate\":\"\",\"defaultGuiPort\":5174},\"ports\":{\"gui\":{\"default\":5174,\"env\":\"\"},\"gateway\":{\"default\":5174,\"env\":\"\"}},\"capabilities\":[]}")
+            .expect("UTF-8 BOM should not prevent runtime discovery");
+
+        assert_eq!(manifest.id, "hermes");
+    }
+
+    #[test]
+    fn refreshes_hermes_agent_when_the_bundle_marker_is_stale_or_entrypoint_is_missing() {
+        let temp = tempfile::tempdir().expect("temporary Hermes runtime");
+        let runtime_dir = temp.path().join("hermes");
+        let entrypoint = runtime_dir.join("hermes_cli").join("main.py");
+        std::fs::create_dir_all(entrypoint.parent().expect("entrypoint parent"))
+            .expect("create Hermes entrypoint directory");
+        std::fs::write(&entrypoint, b"dashboard").expect("write Hermes entrypoint");
+        std::fs::write(
+            runtime_dir.join(".bundle_version"),
+            "0.18.2|kuaifanclaw-1.0.61\n",
+        )
+        .expect("write stale marker");
+
+        let expected = "0.18.2|kuaifanclaw-test";
+        assert!(hermes_agent_bundle_needs_refresh(&runtime_dir, expected));
+
+        std::fs::write(runtime_dir.join(".bundle_version"), format!("{}\n", expected))
+            .expect("write current marker");
+        assert!(!hermes_agent_bundle_needs_refresh(&runtime_dir, expected));
+
+        std::fs::remove_file(&entrypoint).expect("remove Hermes entrypoint");
+        assert!(hermes_agent_bundle_needs_refresh(&runtime_dir, expected));
+    }
+
+    #[test]
+    fn refreshes_a_stale_runtime_from_the_bundled_agent_archive() {
+        let temp = tempfile::tempdir().expect("temporary Hermes runtime");
+        let runtime_dir = temp.path().join("hermes");
+        std::fs::create_dir_all(&runtime_dir).expect("create Hermes runtime");
+        std::fs::write(
+            runtime_dir.join(".bundle_version"),
+            "0.18.2|kuaifanclaw-1.0.61\n",
+        )
+        .expect("write stale marker");
+
+        assert!(refresh_hermes_agent_bundle(&runtime_dir).expect("refresh bundled Hermes runtime"));
+        assert_eq!(
+            std::fs::read_to_string(runtime_dir.join(".bundle_version"))
+                .expect("read refreshed marker")
+                .trim(),
+            hermes_agent_bundle_marker()
+        );
+        assert!(runtime_dir.join("hermes_cli").join("main.py").is_file());
+        assert!(
+            runtime_dir
+                .join("tools")
+                .join("cdp_browser_cli.py")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn desktop_dashboard_token_is_stable_when_runtime_manifest_is_legacy() {
+        assert_eq!(
+            HERMES_DESKTOP_SESSION_TOKEN,
+            "kfc-desk-3463b6e3f34d0f12fc416939e9a81fc395f40f4730cfc145"
+        );
+    }
+
+    #[test]
+    fn recognizes_a_complete_offline_hermes_browser_home() {
+        let temp = tempfile::tempdir().expect("temporary Hermes home");
+        let home = temp.path();
+        assert!(!hermes_browser_home_is_ready(home));
+
+        std::fs::create_dir_all(home.join("node_modules").join(".bin"))
+            .expect("agent-browser bin directory");
+        std::fs::create_dir_all(
+            home.join("ms-playwright")
+                .join("chromium_headless_shell-1228")
+                .join("chrome-headless-shell-win64"),
+        )
+        .expect("Chromium directory");
+        std::fs::create_dir_all(home.join("node")).expect("Node directory");
+        std::fs::write(home.join("node").join("node.exe"), b"node")
+            .expect("Node executable marker");
+        std::fs::write(
+            home.join("node_modules").join(".bin").join("agent-browser.cmd"),
+            b"agent-browser",
+        )
+        .expect("agent-browser command marker");
+        std::fs::write(
+            home.join("ms-playwright")
+                .join("chromium_headless_shell-1228")
+                .join("chrome-headless-shell-win64")
+                .join("chrome-headless-shell.exe"),
+            b"chromium",
+        )
+        .expect("Chromium executable marker");
+
+        assert!(hermes_browser_home_is_ready(home));
+    }
+
+    #[test]
+    fn refreshes_the_browser_shim_for_an_existing_offline_home() {
+        let temp = tempfile::tempdir().expect("temporary data directory");
+        let data_base = temp.path();
+        let home = hermes_home_dir(data_base.to_str().expect("UTF-8 data path"));
+        let shim_path = home.join("node_modules").join(".bin").join("agent-browser.cmd");
+        let chromium = home
+            .join("ms-playwright")
+            .join("chromium-1228")
+            .join("chrome-win64")
+            .join("chrome.exe");
+        let runtime_dir = data_base.join("runtimes").join("hermes");
+
+        std::fs::create_dir_all(shim_path.parent().expect("shim parent"))
+            .expect("browser shim directory");
+        std::fs::create_dir_all(chromium.parent().expect("Chromium parent"))
+            .expect("Chromium directory");
+        std::fs::create_dir_all(home.join("node")).expect("Node directory");
+        std::fs::create_dir_all(runtime_dir.join("python")).expect("Python directory");
+        std::fs::create_dir_all(runtime_dir.join("tools")).expect("tools directory");
+        std::fs::write(home.join("node").join("node.exe"), b"node")
+            .expect("Node executable marker");
+        std::fs::write(&chromium, b"chromium").expect("Chromium executable marker");
+        std::fs::write(&shim_path, b"@echo off\r\nexit /b 0\r\n")
+            .expect("stale browser shim");
+        std::fs::write(
+            runtime_dir.join("python").join("python.exe"),
+            b"python",
+        )
+        .expect("Python executable marker");
+        std::fs::write(
+            runtime_dir.join("tools").join("cdp_browser_cli.py"),
+            b"cdp",
+        )
+        .expect("CDP CLI marker");
+        std::fs::write(
+            home.join(".browser_bundle_version"),
+            format!("{}\n", HERMES_BROWSER_BUNDLE_VERSION),
+        )
+        .expect("browser version marker");
+
+        ensure_hermes_browser_home(data_base.to_str().expect("UTF-8 data path"))
+            .expect("existing browser home should be reused");
+
+        let shim = std::fs::read_to_string(&shim_path).expect("read refreshed shim");
+        assert!(shim.contains("%~dp0"));
+        assert!(shim.contains("cdp_browser_cli.py"));
+    }
+
+    #[test]
+    fn bundled_hermes_archive_is_readable_by_the_runtime_zip_library() {
+        let source_driver = std::fs::read(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("runtimes")
+                .join("hermes")
+                .join("tools")
+                .join("cdp_browser_cli.py"),
+        )
+        .expect("offline browser driver source should exist");
+        let zip_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("bundled-hermes")
+            .join("hermes-agent.zip");
+        let data = std::fs::read(&zip_path).expect("bundled Hermes archive should exist");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(data))
+            .expect("bundled Hermes archive should open");
+        let mut packaged_driver = None;
+        let mut packaged_feishu_sdk = false;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).expect("entry should open");
+            let entry_name = entry.name().to_string();
+            let mut contents = Vec::new();
+            std::io::copy(&mut entry, &mut contents)
+                .unwrap_or_else(|error| panic!("invalid Hermes archive entry {}: {}", entry.name(), error));
+            if entry_name.replace('\\', "/") == "tools/cdp_browser_cli.py" {
+                packaged_driver = Some(contents);
+            }
+            if entry_name.replace('\\', "/") == "lark_oapi/__init__.py" {
+                packaged_feishu_sdk = true;
+            }
+        }
+        let packaged_driver = packaged_driver.expect(
+            "bundled Hermes archive must include the offline browser driver"
+        );
+        assert_eq!(
+            packaged_driver,
+            source_driver,
+            "bundled offline browser driver must match the runtime source"
+        );
+        assert!(
+            packaged_feishu_sdk,
+            "Hermes agent bundle must include the offline Feishu SDK"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hermes_gateway_sidecar_receives_the_bundled_browser_environment() {
+        let temp = tempfile::tempdir().expect("temporary sidecar directory");
+        let data_base = temp.path().join("data");
+        let hermes_home = hermes_home_dir(data_base.to_str().expect("UTF-8 data path"));
+        let browser_bin_dir = hermes_home.join("node_modules").join(".bin");
+        let chromium = hermes_home
+            .join("ms-playwright")
+            .join("chromium-1228")
+            .join("chrome-win64")
+            .join("chrome.exe");
+        std::fs::create_dir_all(&browser_bin_dir).expect("browser shim directory");
+        std::fs::create_dir_all(chromium.parent().expect("Chromium directory"))
+            .expect("Chromium directory");
+        std::fs::create_dir_all(hermes_home.join("node")).expect("Node directory");
+        std::fs::write(hermes_home.join("node").join("node.exe"), b"node")
+            .expect("Node executable marker");
+        std::fs::write(browser_bin_dir.join("agent-browser.cmd"), b"@echo off\r\n")
+            .expect("agent-browser shim");
+        std::fs::write(&chromium, b"chromium").expect("Chromium executable marker");
+
+        let command = build_hermes_gateway_sidecar_command(
+            "python",
+            temp.path(),
+            data_base.to_str().expect("UTF-8 data path"),
+        )
+        .expect("sidecar command should be built");
+        let values: HashMap<_, _> = command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()))
+            })
+            .collect();
+        assert_eq!(
+            values.get("HERMES_HOME").map(String::as_str),
+            Some(hermes_home.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            values.get("PLAYWRIGHT_BROWSERS_PATH").map(String::as_str),
+            Some(hermes_home.join("ms-playwright").to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            values
+                .get("AGENT_BROWSER_EXECUTABLE_PATH")
+                .map(PathBuf::from),
+            Some(chromium)
+        );
+        assert_eq!(values.get("HERMES_OFFLINE_BROWSER").map(String::as_str), Some("1"));
+        let path_entries = std::env::split_paths(std::ffi::OsStr::new(
+            values.get("PATH").expect("sidecar PATH should be configured"),
+        ))
+        .collect::<Vec<_>>();
+        assert!(path_entries.iter().any(|entry| entry == &browser_bin_dir));
+        assert!(path_entries.iter().any(|entry| entry == &hermes_home.join("node")));
+    }
+}
+
+fn build_hermes_gateway_sidecar_command(
+    launch_cmd: &str,
+    cwd: &std::path::Path,
+    data_base: &str,
+) -> Result<Command, String> {
+    let mut command = Command::new(launch_cmd);
+    command
+        .args(["-m", "hermes_cli.main", "gateway", "run", "--force", "--accept-hooks"])
+        .current_dir(cwd)
+        .stdin(Stdio::null());
+    configure_hermes_browser_environment(&mut command, &hermes_home_dir(data_base))?;
+    Ok(command)
+}
+
+fn spawn_hermes_gateway_sidecar(
+    launch_cmd: &str,
+    cwd: &std::path::Path,
+    data_base: &str,
+    log_path: &std::path::Path,
+) -> Result<Child, String> {
+    let log_file = std::fs::File::create(log_path)
+        .map_err(|error| format!("create Hermes gateway log: {}", error))?;
+    let log_file_err = log_file
+        .try_clone()
+        .map_err(|error| format!("clone Hermes gateway log: {}", error))?;
+    let mut command = build_hermes_gateway_sidecar_command(launch_cmd, cwd, data_base)?;
+    command
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_file_err));
+    #[cfg(windows)]
+    command.creation_flags(NO_WINDOW);
+    command
+        .spawn()
+        .map_err(|error| format!("start Hermes platform gateway: {}", error))
 }
 
 fn get_state() -> std::sync::MutexGuard<'static, Option<RuntimeState>> {
@@ -274,6 +750,7 @@ fn ensure_state() {
         *state = Some(RuntimeState {
             instances: HashMap::new(),
             processes: HashMap::new(),
+            sidecar_processes: HashMap::new(),
             module_ports: HashMap::new(),
         });
     }
@@ -467,7 +944,7 @@ pub async fn scan_runtimes(data_dir: tauri::State<'_, crate::AppState>) -> Resul
             }
         };
 
-        let manifest: RuntimeManifest = match serde_json::from_str(&content) {
+        let manifest: RuntimeManifest = match parse_runtime_manifest(&content) {
             Ok(m) => m,
             Err(e) => {
                 warn!("解析 {} 失败: {}", manifest_path.display(), e);
@@ -559,11 +1036,14 @@ pub async fn start_runtime(
 
     let content =
         std::fs::read_to_string(&manifest_path).map_err(|e| format!("读取 runtime.json 失败: {}", e))?;
-    let manifest: RuntimeManifest =
-        serde_json::from_str(&content).map_err(|e| format!("解析 runtime.json 失败: {}", e))?;
+    let mut manifest = parse_runtime_manifest(&content)
+        .map_err(|e| format!("解析 runtime.json 失败: {}", e))?;
 
     if matches!(runtime_id.as_str(), "openclaw" | "hermes") {
         crate::commands::module::sync_module_configuration(&runtime_id, &data_base).await?;
+    }
+    if runtime_id == "hermes" {
+        crate::commands::module::sync_hermes_platform_credentials(&data_base).await;
     }
 
     // 分配端口
@@ -601,6 +1081,21 @@ pub async fn start_runtime(
                 std::thread::sleep(Duration::from_millis(500));
             }
         }
+    }
+
+    if runtime_id == "hermes" {
+        if refresh_hermes_agent_bundle(&runtime_dir)? {
+            info!(
+                "refreshed Hermes runtime bundle at {} to {}",
+                runtime_dir.display(),
+                hermes_agent_bundle_marker()
+            );
+            let refreshed_content = std::fs::read_to_string(&manifest_path)
+                .map_err(|error| format!("read refreshed Hermes runtime.json: {}", error))?;
+            manifest = parse_runtime_manifest(&refreshed_content)
+                .map_err(|error| format!("parse refreshed Hermes runtime.json: {}", error))?;
+        }
+        ensure_hermes_browser_home(&data_base)?;
     }
 
     let gui_url = manifest.gui.url_template.replace("{guiPort}", &gui_port.to_string());
@@ -698,11 +1193,13 @@ pub async fn start_runtime(
         .stderr(Stdio::from(log_file_err));
 
     if runtime_id == "hermes" {
-        cmd.env(
-            "HERMES_HOME",
-            PathBuf::from(&data_base).join("modules").join("hermes"),
-        );
-    }
+        let hermes_home = ensure_hermes_browser_home(&data_base)?;
+        configure_hermes_browser_environment(&mut cmd, &hermes_home)?;
+    // Older installed runtime.json files lack this value. The desktop GUI
+    // authenticates its REST and WebSocket calls with the same token, so it
+    // must be supplied by the launcher rather than the runtime manifest.
+    cmd.env("HERMES_DASHBOARD_SESSION_TOKEN", HERMES_DESKTOP_SESSION_TOKEN);
+}
 
     // 设置额外环境变量，相对路径相对于 runtime_dir 解析
     for (key, val) in &manifest.launch.env {
@@ -768,7 +1265,7 @@ pub async fn start_runtime(
                     let val = val.trim().trim_matches('"').trim_matches('\'');
                     if !key.is_empty() && !val.is_empty() {
                         cmd.env(key, val);
-                        info!("hermes env from .env: {}={}", key, &val[..std::cmp::min(20, val.len())]);
+                        info!("hermes env from .env: {}=<set>", key);
                     }
                 }
             }
@@ -822,6 +1319,26 @@ pub async fn start_runtime(
         ));
     }
 
+    let hermes_gateway = if runtime_id == "hermes" {
+        let gateway_log_path = runtime_log_path(&data_base, "hermes")
+            .parent()
+            .map(|parent| parent.join("gateway-run.log"))
+            .unwrap_or_else(|| PathBuf::from(&data_base).join("logs").join("gateway-run.log"));
+        match spawn_hermes_gateway_sidecar(&launch_cmd, &cwd, &data_base, &gateway_log_path) {
+            Ok(child) => {
+                info!("spawned Hermes platform gateway PID {} log={}", child.id(), gateway_log_path.display());
+                Some(child)
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+
     // Health check passed: save process to state
     let pid = child.id();
     ensure_state();
@@ -829,6 +1346,9 @@ pub async fn start_runtime(
         let mut state = get_state();
         if let Some(ref mut s) = *state {
             s.processes.insert(runtime_id.clone(), child);
+            if let Some(gateway) = hermes_gateway {
+                s.sidecar_processes.insert(runtime_id.clone(), gateway);
+            }
             s.module_ports
                 .insert(runtime_id.clone(), (gui_port, gateway_port));
         }
@@ -887,6 +1407,11 @@ pub async fn stop_runtime(
                 if let Some(pid) = inst.pid {
                     external_pid = Some(pid);
                 }
+            }
+            if let Some(mut child) = s.sidecar_processes.remove(&runtime_id) {
+                info!("stopping runtime sidecar {}", runtime_id);
+                let _ = child.kill();
+                let _ = child.wait();
             }
             s.module_ports.remove(&runtime_id);
             if let Some(inst) = s.instances.get_mut(&runtime_id) {
@@ -1123,8 +1648,9 @@ pub async fn install_hermes_runtime(
         let existing_version = if version_marker.is_file() {
             std::fs::read_to_string(&version_marker).unwrap_or_default().trim().to_string()
         } else { String::new() };
-        let needs_extract = !runtime_dir.join("hermes_cli").join("main.py").exists()
-            || existing_version != "0.18.2";
+        let expected_marker = hermes_agent_bundle_marker();
+            let needs_extract = !runtime_dir.join("hermes_cli").join("main.py").exists()
+                || existing_version.trim() != expected_marker;
         if needs_extract {
             emit("hermes-agent", "started", Some(50.0), "正在解压 Hermes Agent v0.18.2 (12MB)...");
             let data = std::fs::read(&hermes_zip).map_err(|e| format!("读取 hermes-agent.zip: {}", e))?;
@@ -1149,7 +1675,7 @@ pub async fn install_hermes_runtime(
             emit("hermes-agent", "finished", Some(95.0), "Hermes Agent 解压完成");
 
             // 写入版本标记：下次安装若标记与本版本一致且 main.py 仍在则跳过解压。
-            let _ = std::fs::write(&version_marker, "0.18.2\n");
+            let _ = std::fs::write(&version_marker, format!("{}\n", expected_marker));
         } else {
             emit("hermes-agent", "finished", Some(95.0), "Hermes Agent 已存在，跳过解压");
         }
@@ -1157,5 +1683,6 @@ pub async fn install_hermes_runtime(
 
     emit("hermes", "finished", Some(100.0), "Hermes Agent 安装完成！可在首页启动");
 
+    ensure_hermes_browser_home(&data_base)?;
     Ok(format!("安装完成: {}", runtime_dir.display()))
 }

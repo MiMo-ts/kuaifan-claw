@@ -754,6 +754,23 @@ mod plugin_entries_normalize_tests {
     }
 
     #[test]
+    fn keeps_manifest_backed_plugin_directories_under_data_plugins() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("data");
+        let node_modules = data_dir.join("openclaw").join("node_modules");
+        let plugin_dir = data_dir.join("plugins").join("wecom");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join("openclaw.plugin.json"), "{}").unwrap();
+        let mut base = json!({ "plugins": { "load": { "paths": [] } } });
+
+        ensure_plugins_load_paths(&mut base, &node_modules);
+
+        let expected = plugin_dir.to_string_lossy().replace('\\', "/");
+        let paths = base["plugins"]["load"]["paths"].as_array().unwrap();
+        assert!(paths.iter().any(|path| path.as_str() == Some(expected.as_str())));
+    }
+
+    #[test]
     fn migrates_legacy_managed_feishu_plugin_to_active_state_root() {
         let temp = tempfile::tempdir().unwrap();
         let state_dir = temp.path().join("openclaw");
@@ -2990,6 +3007,18 @@ fn ensure_plugins_load_paths(base: &mut serde_json::Value, node_modules: &std::p
                 .trim_end_matches('/')
                 .eq_ignore_ascii_case(legacy_path.trim_end_matches('/'))
         });
+        if let Ok(entries) = std::fs::read_dir(&legacy_plugins_root) {
+            for entry in entries.flatten() {
+                let plugin_dir = entry.path();
+                if !plugin_dir.is_dir() || !plugin_dir.join("openclaw.plugin.json").is_file() {
+                    continue;
+                }
+                let plugin_path = plugin_dir.to_string_lossy().replace('\\', "/");
+                if !paths.iter().any(|path| path.eq_ignore_ascii_case(&plugin_path)) {
+                    paths.push(plugin_path);
+                }
+            }
+        }
     }
 
     let legacy_bundled_extensions = node_modules
@@ -3667,6 +3696,9 @@ pub async fn start_gateway_with_data_dir_path(data_dir: &str) -> Result<String, 
     tokio::fs::create_dir_all(&state_dir)
         .await
         .map_err(|e| format!("创建 OpenClaw 状态目录失败: {}", e))?;
+    for patch_result in crate::commands::plugin_patches::repair_wechat_runtime_state(data_dir) {
+        info!("[plugin_patch] {}", patch_result);
+    }
     ensure_official_feishu_plugin(data_dir, &state_dir)?;
     let state_abs = abs_path_str(&state_dir)?;
 
@@ -4063,6 +4095,7 @@ pub async fn proxy_gateway_chat(
     model: String,
     messages: Vec<serde_json::Value>,
     _stream: Option<bool>,
+    session_key: Option<String>,
 ) -> Result<String, String> {
     let data_base = data_dir.inner().get_data_dir();
     let token = resolve_gateway_ws_token(&data_base);
@@ -4070,10 +4103,26 @@ pub async fn proxy_gateway_chat(
         .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
         .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
         .collect::<Vec<_>>().join("\n");
-    if user_msg.is_empty() { return Err("消息内容为空".to_string()); }
+    if user_msg.is_empty() { return Err("��Ϣ����Ϊ��".to_string()); }
     let upstream_model = if let Some(idx) = model.find('/') { model[idx+1..].to_string() } else { model.clone() };
-    tracing::info!("proxy_gateway_chat: calling agent WS port={} model={}", port, upstream_model);
-    crate::commands::gateway_ws::call_gateway_chat(port, &token, &user_msg, None, Some(&upstream_model), None).await
+    // ǰ�˴��� threadStore �� sessionKey��Ϊ��ʱ�����µģ�����Ի��䵽 main��
+    let bound_key: String = session_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("kuaifan-{}", uuid::Uuid::new_v4()));
+    tracing::info!(
+        "proxy_gateway_chat: calling agent WS port={} model={} session_key={}",
+        port, upstream_model, bound_key
+    );
+    crate::commands::gateway_ws::call_gateway_chat(
+        port,
+        &token,
+        &user_msg,
+        Some(&bound_key),
+        Some(&upstream_model),
+        None,
+    )
+    .await
 }
 
 // ============================================================

@@ -16,9 +16,11 @@ import {
 } from "../components/icons";
 ﻿import { useAppStore } from '../stores/appStore';
 import FeishuWizard from '../components/wizard/FeishuWizard';
+import { moduleDefinition } from '../modules/registry';
 
 interface Instance {
   id: string;
+  module_id: string;
   name: string;
   enabled: boolean;
   robot_id: string;
@@ -76,6 +78,8 @@ const PROVIDER_OPTIONS = [
 export default function InstancePage() {
   const navigate = useNavigate();
   const { robots } = useAppStore();
+  const activeModule = useAppStore((state) => state.activeModule);
+  const activeModuleDefinition = moduleDefinition(activeModule);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -96,12 +100,12 @@ export default function InstancePage() {
   const [modelSectionOpen, setModelSectionOpen] = useState(true);
   const [showFeishuWizard, setShowFeishuWizard] = useState(false);
 
-  useEffect(() => { loadInstances(); }, []);
+  useEffect(() => { void loadInstances(); }, [activeModule]);
 
   const loadInstances = async () => {
     setLoading(true);
     try {
-      const result = await invoke<Instance[]>('list_instances');
+      const result = await invoke<Instance[]>('list_instances', { moduleId: activeModule });
       setInstances(result);
     } catch (e) { toast.error(String(e)); }
     finally { setLoading(false); }
@@ -240,8 +244,8 @@ export default function InstancePage() {
               <CxIconArrowLeft className="w-5 h-5" />
             </button>
             <div>
-              <h1 className="text-2xl font-bold ">实例管理</h1>
-              <p className="">管理所有 Agent 实例</p>
+              <h1 className="text-2xl font-bold ">{activeModuleDefinition.name} 实例管理</h1>
+              <p className="">管理当前模块的 Agent 实例</p>
             </div>
           </div>
           <div className="flex gap-3">

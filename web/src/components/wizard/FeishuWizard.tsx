@@ -43,7 +43,7 @@ const FEISHU_WIZARD_STEPS: WizardStep[] = [
   {
     step: 3,
     title: '配置事件订阅',
-    description: '在「事件订阅」中添加事件：接收消息（im.message.receive_v1），并填写请求地址。系统将自动提供 WebSocket 接入点地址。',
+    description: '在「事件订阅」中选择「使用长连接接收事件」，添加事件：接收消息（im.message.receive_v1）。长连接模式不填写公网回调地址。',
     url: 'https://open.feishu.cn/app',
     urlLabel: '打开飞书开放平台',
     checkLabel: '已配置事件订阅',

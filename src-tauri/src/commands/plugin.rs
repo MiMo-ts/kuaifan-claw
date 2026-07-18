@@ -294,6 +294,30 @@ fn qq_channel_runtime_ready(plugin_dir: &Path) -> bool {
     plugin_package_json_deps_installed(plugin_dir)
 }
 
+fn declared_openclaw_extensions_exist(plugin_dir: &Path) -> bool {
+    let package_path = plugin_dir.join("package.json");
+    let Ok(content) = fs::read_to_string(package_path) else {
+        return false;
+    };
+    let Ok(package) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let Some(extensions) = package
+        .get("openclaw")
+        .and_then(|openclaw| openclaw.get("extensions"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+
+    !extensions.is_empty()
+        && extensions.iter().all(|entry| {
+            entry
+                .as_str()
+                .is_some_and(|entry| plugin_dir.join(entry.trim_start_matches("./")).is_file())
+        })
+}
+
 /// 通道插件运行时依赖是否就绪（与 `extensions/*/package.json` 及定向 npm 安装约定一致）。
 /// 注意：检测的是插件的**实际外部依赖**，而非插件自身（npm 不会把自己安装为 node_modules 子目录）。
 fn channel_plugin_runtime_ready(plugin_dir: &Path, plugin_id: &str) -> bool {
@@ -306,7 +330,10 @@ fn channel_plugin_runtime_ready(plugin_dir: &Path, plugin_id: &str) -> bool {
     }
     match plugin_id {
         // wxwork / wecom: @wecom/wecom-openclaw-plugin 依赖 @wecom/aibot-node-sdk
-        "wxwork" | "wecom" => nm.join("@wecom").join("aibot-node-sdk").is_dir(),
+        "wxwork" | "wecom" => {
+            nm.join("@wecom").join("aibot-node-sdk").is_dir()
+                && declared_openclaw_extensions_exist(plugin_dir)
+        }
         // qq: 见 qq_channel_runtime_ready
         "qq" => qq_channel_runtime_ready(plugin_dir),
         // feishu: 核心依赖 @larksuiteoapi/node-sdk
@@ -320,9 +347,19 @@ fn channel_plugin_runtime_ready(plugin_dir: &Path, plugin_id: &str) -> bool {
 /// 启动网关前：根据已启用实例准备官方通道插件并同步其加载路径。
 /// 不弹 UI；失败仅打日志，避免阻塞已配置好的网关启动。
 pub(crate) async fn ensure_plugins_for_enabled_instances(data_dir: &str) {
-    let inst_path = PathBuf::from(data_dir)
+    if let Err(error) = crate::commands::instance::migrate_legacy_instances_to_modules(data_dir).await {
+        tracing::warn!("读取 OpenClaw 模块实例前迁移旧配置失败: {}", error);
+    }
+    let module_instances_path = PathBuf::from(data_dir)
         .join("config")
+        .join("modules")
+        .join("openclaw")
         .join("instances.yaml");
+    let inst_path = if module_instances_path.is_file() {
+        module_instances_path
+    } else {
+        PathBuf::from(data_dir).join("config").join("instances.yaml")
+    };
     let raw = match tokio::fs::read_to_string(&inst_path).await {
         Ok(s) => s,
         Err(_) => return,
@@ -622,8 +659,19 @@ fn patch_official_npm_channel_plugin_after_install(
             }),
         )
     } else if spec_lower.contains("@wecom/wecom-openclaw-plugin") {
+        let entry_candidates = ["./dist/index.js", "./dist/esm/index.js"];
+        let ext_path = entry_candidates
+            .iter()
+            .find(|entry| plugin_dir.join(entry.trim_start_matches("./")).is_file())
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "企业微信插件缺少可加载入口，已检查: {}",
+                    entry_candidates.join(", ")
+                )
+            })?;
         (
-            "./dist/esm/index.js",
+            ext_path,
             json!({
                 // 与官方包 openclaw.plugin.json 一致，避免 id 与 entry 提示不一致
                 "id": "wecom-openclaw-plugin",
@@ -665,6 +713,18 @@ fn patch_official_npm_channel_plugin_after_install(
         plugin_dir.display()
     );
     Ok(())
+}
+
+fn repair_official_channel_plugin_entry_after_dependency_install(
+    plugin_dir: &Path,
+    plugin_id: &str,
+) -> Result<(), String> {
+    let npm_spec = match plugin_id {
+        "wxwork" | "wecom" => "@wecom/wecom-openclaw-plugin",
+        "qq" => "@sliverp/qqbot",
+        _ => return Ok(()),
+    };
+    patch_official_npm_channel_plugin_after_install(plugin_dir, npm_spec)
 }
 
 /// GUI 进程内为插件目录安装 node_modules（与向导依赖安装策略一致）。
@@ -1025,6 +1085,8 @@ fn install_plugin_deps_blocking(
     }
 
     restore_stub_manifest(&stub_manifest_backup, plugin_id);
+    repair_official_channel_plugin_entry_after_dependency_install(&plugin_dir_path, plugin_id)
+        .map_err(|error| format!("修复官方插件入口失败: {}", error))?;
     if channel_plugin_runtime_ready(&plugin_dir_path, plugin_id) {
         Ok(())
     } else {
@@ -2140,4 +2202,82 @@ pub async fn uninstall_plugin(
 
     info!("插件 {} 卸载完成", plugin_id);
     Ok(format!("插件 {} 卸载成功", plugin_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        channel_plugin_runtime_ready, patch_official_npm_channel_plugin_after_install,
+        repair_official_channel_plugin_entry_after_dependency_install,
+    };
+    use serde_json::json;
+    use std::fs;
+
+    #[test]
+    fn wecom_patch_uses_the_existing_dist_index_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin_dir = temp.path();
+        fs::create_dir_all(plugin_dir.join("dist")).unwrap();
+        fs::write(plugin_dir.join("dist").join("index.js"), "export default {};").unwrap();
+        fs::write(
+            plugin_dir.join("package.json"),
+            r#"{"name":"@wecom/wecom-openclaw-plugin","openclaw":{"extensions":["./dist/esm/index.js"]}}"#,
+        )
+        .unwrap();
+
+        patch_official_npm_channel_plugin_after_install(
+            plugin_dir,
+            "@wecom/wecom-openclaw-plugin",
+        )
+        .unwrap();
+
+        let package: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(plugin_dir.join("package.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            package["openclaw"]["extensions"],
+            json!(["./dist/index.js"])
+        );
+    }
+
+    #[test]
+    fn wecom_runtime_is_not_ready_when_its_declared_extension_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin_dir = temp.path();
+        fs::create_dir_all(plugin_dir.join("dist")).unwrap();
+        fs::create_dir_all(plugin_dir.join("node_modules").join("@wecom").join("aibot-node-sdk"))
+            .unwrap();
+        fs::write(plugin_dir.join("dist").join("index.js"), "export default {};").unwrap();
+        fs::write(
+            plugin_dir.join("package.json"),
+            r#"{"openclaw":{"extensions":["./dist/esm/index.js"]}}"#,
+        )
+        .unwrap();
+
+        assert!(!channel_plugin_runtime_ready(plugin_dir, "wecom"));
+    }
+
+    #[test]
+    fn wecom_dependency_repair_rewrites_the_stale_official_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin_dir = temp.path();
+        fs::create_dir_all(plugin_dir.join("dist")).unwrap();
+        fs::write(plugin_dir.join("dist").join("index.js"), "export default {};").unwrap();
+        fs::write(
+            plugin_dir.join("package.json"),
+            r#"{"openclaw":{"extensions":["./dist/esm/index.js"]}}"#,
+        )
+        .unwrap();
+
+        repair_official_channel_plugin_entry_after_dependency_install(plugin_dir, "wecom")
+            .unwrap();
+
+        let package: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(plugin_dir.join("package.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            package["openclaw"]["extensions"],
+            json!(["./dist/index.js"])
+        );
+    }
 }

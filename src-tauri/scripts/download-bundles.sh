@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env bash
 # =============================================================================
-# download-bundles.sh  鈥? OpenClaw-CN Manager  macOS / Linux 璧勬簮涓嬭浇鑴氭湰
+# download-bundles.sh  鈥? OpenClaw Manager  macOS / Linux 璧勬簮涓嬭浇鑴氭湰
 # 鐢ㄦ硶锛?#   ./download-bundles.sh          # 涓嬭浇鍏ㄩ儴
 #   ./download-bundles.sh -f       # 寮哄埗閲嶆柊涓嬭浇
 #   ./download-bundles.sh -p       # 浠呬笅杞介€氶亾鎻掍欢
@@ -151,14 +151,14 @@ if [[ "$PLUGINS_ONLY" != true ]]; then
 
     # A1. Node.js锛?tar.gz锛宮acOS 涓撶敤锛?    case "$ARCH" in
         arm64)
-            NODE_FILE="node-v22.14.0-darwin-arm64.tar.gz"
-            NODE_URL="https://npmmirror.com/mirrors/node/v22.14.0/$NODE_FILE" ;;
+            NODE_FILE="node-v24.15.0-darwin-arm64.tar.gz"
+            NODE_URL="https://npmmirror.com/mirrors/node/v24.15.0/$NODE_FILE" ;;
         x64)
-            NODE_FILE="node-v22.14.0-darwin-x64.tar.gz"
-            NODE_URL="https://npmmirror.com/mirrors/node/v22.14.0/$NODE_FILE" ;;
+            NODE_FILE="node-v24.15.0-darwin-x64.tar.gz"
+            NODE_URL="https://npmmirror.com/mirrors/node/v24.15.0/$NODE_FILE" ;;
     esac
     NODE_DEST="$SRC_TAURI/bundled-env/$NODE_FILE"
-    download_file "$NODE_URL" "$NODE_DEST" "Node.js v22.14.0 (darwin-$ARCH)" $((5 * 1024 * 1024))
+    download_file "$NODE_URL" "$NODE_DEST" "Node.js v24.15.0 (darwin-$ARCH)" $((5 * 1024 * 1024))
 
     # A2. MinGit 鈥?macOS 閫氬父鏈夌郴缁?git锛岃剼鏈細妫€娴嬫槸鍚﹀凡鏈?git
     #     鑻?CI 闇€瑕侊紝鍙敤 git-for-windows 鐨?PortableGit tar.gz
@@ -181,10 +181,10 @@ if [[ "$PLUGINS_ONLY" != true ]]; then
         fi
     fi
 
-    # A3. openclaw-cn
-    step "涓嬭浇 openclaw-cn npm 鍖咃紙npm pack锛屽彲鑳介渶瑕?1~5 鍒嗛挓锛?
-    OC_DEST="$SRC_TAURI/bundled-openclaw/openclaw-cn.tgz"
-    npm_pack "openclaw-cn" "$OC_DEST" "openclaw-cn" $((1 * 1024 * 1024))
+    # A3. openclaw
+    step "涓嬭浇 openclaw npm 鍖咃紙npm pack锛屽彲鑳介渶瑕?1~5 鍒嗛挓锛?
+    OC_DEST="$SRC_TAURI/bundled-openclaw/openclaw.tgz"
+    npm_pack "openclaw" "$OC_DEST" "openclaw" $((1 * 1024 * 1024))
 
 fi
 

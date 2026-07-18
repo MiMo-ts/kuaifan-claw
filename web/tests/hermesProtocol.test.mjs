@@ -4,10 +4,12 @@ import test from "node:test";
 
 const compiledModule = new URL("../../artifacts/test/web/hermesProtocol.mjs", import.meta.url);
 const gatewayClientModule = new URL("../../artifacts/test/web/gatewayClient.mjs", import.meta.url);
+const hermesApiModule = new URL("../../artifacts/test/web/hermesApi.mjs", import.meta.url);
 const attachmentModule = new URL("../../artifacts/test/web/hermesAttachments.mjs", import.meta.url);
 const moduleSessionProtocol = new URL("../../artifacts/test/web/moduleSessionProtocol.mjs", import.meta.url);
 const moduleExists = existsSync(compiledModule);
 const gatewayClientModuleExists = existsSync(gatewayClientModule);
+const hermesApiModuleExists = existsSync(hermesApiModule);
 const attachmentModuleExists = existsSync(attachmentModule);
 const moduleSessionProtocolExists = existsSync(moduleSessionProtocol);
 
@@ -41,6 +43,8 @@ if (attachmentModuleExists) {
     assert.equal(classifyAttachment("image/png"), "image");
     assert.equal(classifyAttachment("video/mp4"), "video");
     assert.equal(classifyAttachment("text/plain"), "document");
+    assert.equal(classifyAttachment("application/json", "meta.json"), "document");
+    assert.equal(classifyAttachment("application/octet-stream", "main.py"), "document");
   });
 
   test("submits only uploaded attachment ids", () => {
@@ -89,6 +93,46 @@ if (gatewayClientModuleExists) {
 
   test("manager requests only the session scopes", () => {
     assert.deepEqual(MANAGER_OPERATOR_SCOPES, ["operator.read", "operator.write"]);
+  });
+}
+
+if (hermesApiModuleExists) {
+  const { HermesApiClient } = await import(hermesApiModule);
+
+  test("keeps duration metadata from a completed tool event", () => {
+    const client = new HermesApiClient({ baseUrl: "http://127.0.0.1:5174" });
+    assert.deepEqual(
+      client.normalizeStreamEvent("tool.complete", {
+        tool_id: "tool-1",
+        result: { success: true },
+        duration_s: 1.25,
+      }),
+      {
+        type: "tool_result",
+        toolCallId: "tool-1",
+        result: "{\n  \"success\": true\n}",
+        status: "done",
+        durationS: 1.25,
+      },
+    );
+  });
+
+  test("turns a failed tool event into an error timeline step", () => {
+    const client = new HermesApiClient({ baseUrl: "http://127.0.0.1:5174" });
+    assert.deepEqual(
+      client.normalizeStreamEvent("tool.failed", {
+        tool_id: "tool-2",
+        error: "navigation blocked",
+        duration_s: 0.5,
+      }),
+      {
+        type: "tool_result",
+        toolCallId: "tool-2",
+        result: "navigation blocked",
+        status: "error",
+        durationS: 0.5,
+      },
+    );
   });
 }
 
@@ -144,9 +188,12 @@ if (moduleSessionProtocolExists) {
 if (moduleExists) {
   const {
     mergeAuthoritativeMessages,
+    formatHermesToolArgs,
     normalizeCreatedSession,
+    normalizePersistedToolHistoryMessage,
     normalizeRuntimeProvider,
     parseHermesSlashCommand,
+    reconcileHermesStreamingMessages,
     terminalEventStatus,
   } = await import(compiledModule);
 
@@ -194,6 +241,54 @@ if (moduleExists) {
     const current = [{ id: "local", content: "你好" }];
     const persisted = [{ id: "stored", content: "你好" }];
     assert.equal(mergeAuthoritativeMessages(current, persisted), persisted);
+  });
+
+  test("does not replace a live assistant turn with persisted tool history", () => {
+    const current = [
+      { id: "user", role: "user", content: "open xiaohongshu", status: "done" },
+      { id: "assistant", role: "assistant", content: "", status: "streaming" },
+    ];
+    const persisted = [
+      { id: "stored-user", role: "user", content: "open xiaohongshu", status: "done" },
+      { id: "stored-tool", role: "tool", content: "", status: "done" },
+    ];
+
+    assert.deepEqual(
+      reconcileHermesStreamingMessages(current, persisted),
+      { messages: current, terminal: false },
+    );
+  });
+
+  test("normalizes persisted tool history into a completed ToolStep", () => {
+    assert.deepEqual(
+      normalizePersistedToolHistoryMessage(
+        { role: "tool", name: "browser_navigate", context: "Browsing https://www.xiaohongshu.com" },
+        "history-tool-1",
+        1_000,
+      ),
+      {
+        id: "history-tool-1",
+        role: "assistant",
+        content: "",
+        status: "done",
+        ts: 1_000,
+        toolCalls: [{
+          id: "history-tool-1-tool",
+          name: "browser_navigate",
+          context: "Browsing https://www.xiaohongshu.com",
+          status: "done",
+          startedAt: 1_000,
+          finishedAt: 1_000,
+        }],
+      },
+    );
+  });
+
+  test("formats tool arguments for the timeline while redacting secrets", () => {
+    assert.equal(
+      formatHermesToolArgs({ url: "https://www.example.com", full: true, api_key: "secret-value" }),
+      "url: https://www.example.com · full: true · api_key: [redacted]",
+    );
   });
 
   test("only turn completion and errors are terminal events", () => {

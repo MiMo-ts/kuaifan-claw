@@ -32,7 +32,7 @@ pub struct GatewayConfig { pub channel_id: String, #[serde(default)] pub single_
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest { pub id: String, pub name: String, pub version: String, pub icon: String, pub description: String, #[serde(default)] pub protocol: PluginProtocol, #[serde(default)] pub features: Vec<String>, pub install: InstallConfig, #[serde(default)] pub auth: AuthConfig, #[serde(default)] pub credentials: Vec<CredentialDef>, pub gateway: GatewayConfig }
 #[derive(Debug, Clone, Serialize)] pub struct DeviceAuthStart { pub success: bool, pub qr_image_base64: String, pub device_code: String, pub expires_in: u64, pub interval_ms: u64, pub error: Option<String> }
-#[derive(Debug, Clone, Serialize)] pub struct DeviceAuthResult { pub status: String, pub access_token: Option<String>, pub client_secret: Option<String>, pub message: Option<String>, pub error: Option<String> }
+#[derive(Debug, Clone, Serialize)] pub struct DeviceAuthResult { pub status: String, pub access_token: Option<String>, pub client_secret: Option<String>, pub user_open_id: Option<String>, pub message: Option<String>, pub error: Option<String> }
 #[derive(Debug, Clone, Serialize)] pub struct QrCodeAuthStart { pub success: bool, pub qr_image_base64: String, pub qrcode_token: String, pub error: Option<String> }
 #[derive(Debug, Clone, Serialize)] pub struct QrCodeAuthResult { pub status: String, pub bot_token: Option<String>, pub ilink_bot_id: Option<String>, pub error: Option<String> }
 #[derive(Debug, Clone, Serialize)] pub struct ValidationResult { pub valid: bool, pub message: Option<String> }
@@ -141,7 +141,7 @@ pub async fn poll_device_auth(app: AppHandle, data_dir: tauri::State<'_, crate::
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build().map_err(|e| format!("HTTP:{}",e))?;
     let resp: serde_json::Value = match client.post(&da.poll_url).json(&serde_json::json!({"device_code":device_code})).send().await {
         Ok(r) => r.json().await.map_err(|e| format!("解析:{}",e))?,
-        Err(e) if e.is_timeout() => return Ok(DeviceAuthResult{status:"waiting".into(),access_token:None,client_secret:None,message:Some("等待扫码…".into()),error:None}),
+        Err(e) if e.is_timeout() => return Ok(DeviceAuthResult{status:"waiting".into(),access_token:None,client_secret:None,user_open_id:None,message:Some("等待扫码…".into()),error:None}),
         Err(e) => return Err(format!("poll:{}",e)),
     };
     let st = resp.get("status").and_then(|v| v.as_str()).unwrap_or("");
@@ -151,16 +151,16 @@ pub async fn poll_device_auth(app: AppHandle, data_dir: tauri::State<'_, crate::
             let cid = resp.get("clientId").or_else(|| resp.get("client_id")).or_else(|| resp.get("appId")).or_else(|| resp.get("app_id")).or_else(|| resp.get("accessToken")).and_then(|v| v.as_str()).map(|s| s.to_string());
             let csec = resp.get("clientSecret").or_else(|| resp.get("client_secret")).or_else(|| resp.get("appSecret")).or_else(|| resp.get("app_secret")).and_then(|v| v.as_str()).map(|s| s.to_string());
             tracing::info!("[pf] dingtalk SUCCESS: cid={:?}, csec_len={}", cid, csec.as_ref().map(|s|s.len()).unwrap_or(0));
-            Ok(DeviceAuthResult{status:"success".into(),access_token:cid,client_secret:csec,message:Some("成功".into()),error:None})
+            Ok(DeviceAuthResult{status:"success".into(),access_token:cid,client_secret:csec,user_open_id:None,message:Some("成功".into()),error:None})
         },
         "WAITING"|"SCANNED" => {
             let msg: Option<String> = Some(if st=="SCANNED"{"已扫码…"}else{"等待扫码…"}.to_string());
-            Ok(DeviceAuthResult{status:"waiting".into(),access_token:None,client_secret:None,message:msg,error:None})
+            Ok(DeviceAuthResult{status:"waiting".into(),access_token:None,client_secret:None,user_open_id:None,message:msg,error:None})
         },
-        "EXPIRED"|"expired" => Ok(DeviceAuthResult{status:"expired".into(),access_token:None,client_secret:None,message:Some("已过期".into()),error:None}),
-        "DENIED"|"denied" => Ok(DeviceAuthResult{status:"denied".into(),access_token:None,client_secret:None,message:Some("已拒绝".into()),error:None}),
-        _ if resp.get("errcode").and_then(|v|v.as_i64())!=Some(0) => { let em = resp.get("errmsg").and_then(|v|v.as_str()).unwrap_or("未知"); Ok(DeviceAuthResult{status:"error".into(),access_token:None,client_secret:None,message:None,error:Some(format!("{}",em))}) }
-        _ => Ok(DeviceAuthResult{status:"waiting".into(),access_token:None,client_secret:None,message:Some(format!("{}…",st)),error:None}),
+        "EXPIRED"|"expired" => Ok(DeviceAuthResult{status:"expired".into(),access_token:None,client_secret:None,user_open_id:None,message:Some("已过期".into()),error:None}),
+        "DENIED"|"denied" => Ok(DeviceAuthResult{status:"denied".into(),access_token:None,client_secret:None,user_open_id:None,message:Some("已拒绝".into()),error:None}),
+        _ if resp.get("errcode").and_then(|v|v.as_i64())!=Some(0) => { let em = resp.get("errmsg").and_then(|v|v.as_str()).unwrap_or("未知"); Ok(DeviceAuthResult{status:"error".into(),access_token:None,client_secret:None,user_open_id:None,message:None,error:Some(format!("{}",em))}) }
+        _ => Ok(DeviceAuthResult{status:"waiting".into(),access_token:None,client_secret:None,user_open_id:None,message:Some(format!("{}…",st)),error:None}),
     }
 }
 
@@ -533,6 +533,181 @@ pub async fn save_wechat_bot_token_inner(data_dir: &str, bot_token: &str, module
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{
+        feishu_qr_url, feishu_registration_credential_candidates, feishu_websocket_endpoint_is_usable,
+        save_feishu_credentials_inner,
+    };
+    use std::fs;
+
+    #[tokio::test]
+    async fn quick_bind_updates_the_module_scoped_hermes_instance() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path();
+        let instances_dir = data_dir.join("config").join("modules").join("hermes");
+        fs::create_dir_all(&instances_dir).unwrap();
+        fs::write(
+            instances_dir.join("instances.yaml"),
+            "instances:\n- id: hermes-feishu\n  module_id: hermes\n  name: Hermes Feishu\n  enabled: true\n  robot_id: null\n  channel_type: feishu\n  channel_config: {}\n  model: null\n  max_history: 50\n  response_mode: stream\n  message_count: 0\n  created_at: 2026-01-01T00:00:00Z\n  updated_at: 2026-01-01T00:00:00Z\nstats: null\n",
+        )
+        .unwrap();
+        fs::create_dir_all(data_dir.join("config")).unwrap();
+        fs::write(data_dir.join("config").join("instances.yaml"), "instances: []\nstats: null\n")
+            .unwrap();
+
+        save_feishu_credentials_inner(
+            &data_dir.to_string_lossy(),
+            "test-app-id",
+            "test-app-secret",
+            Some("test-open-id"),
+            "hermes",
+        )
+        .await
+        .unwrap();
+
+        let document: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(instances_dir.join("instances.yaml")).unwrap(),
+        )
+        .unwrap();
+        let instance = &document["instances"][0];
+        assert_eq!(instance["channel_config"]["appId"].as_str(), Some("test-app-id"));
+        assert_eq!(
+            instance["channel_config"]["allowFrom"][0].as_str(),
+            Some("test-open-id")
+        );
+        assert_eq!(
+            instance["channel_config"]["dmPolicy"].as_str(),
+            Some("allowlist")
+        );
+        let env = fs::read_to_string(data_dir.join("modules").join("hermes").join(".env")).unwrap();
+        assert!(env.contains("FEISHU_CONNECTION_MODE=websocket"));
+    }
+
+    #[tokio::test]
+    async fn quick_rebind_replaces_credentials_on_the_only_enabled_hermes_feishu_instance() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path();
+        let instances_dir = data_dir.join("config").join("modules").join("hermes");
+        fs::create_dir_all(&instances_dir).unwrap();
+        fs::write(
+            instances_dir.join("instances.yaml"),
+            "instances:\n- id: hermes-feishu\n  module_id: hermes\n  name: Hermes Feishu\n  enabled: true\n  robot_id: null\n  channel_type: feishu\n  channel_config:\n    appId: old-app-id\n    appSecret: old-app-secret\n  model: null\n  max_history: 50\n  response_mode: stream\n  message_count: 0\n  created_at: 2026-01-01T00:00:00Z\n  updated_at: 2026-01-01T00:00:00Z\nstats: null\n",
+        )
+        .unwrap();
+
+        save_feishu_credentials_inner(
+            &data_dir.to_string_lossy(),
+            "new-app-id",
+            "new-app-secret",
+            Some("new-open-id"),
+            "hermes",
+        )
+        .await
+        .unwrap();
+
+        let document: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(instances_dir.join("instances.yaml")).unwrap(),
+        )
+        .unwrap();
+        let instance = &document["instances"][0];
+        assert_eq!(instance["channel_config"]["appId"].as_str(), Some("new-app-id"));
+        assert_eq!(
+            instance["channel_config"]["appSecret"].as_str(),
+            Some("new-app-secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn openclaw_quick_bind_stages_the_scanned_user_as_an_allowlist() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path();
+        let instances_dir = data_dir.join("config").join("modules").join("openclaw");
+        fs::create_dir_all(&instances_dir).unwrap();
+        fs::write(
+            instances_dir.join("instances.yaml"),
+            "instances: []\nstats: null\n",
+        )
+        .unwrap();
+        let openclaw_dir = data_dir.join("openclaw");
+        fs::create_dir_all(&openclaw_dir).unwrap();
+        fs::write(
+            openclaw_dir.join("openclaw.json"),
+            r#"{"channels":{"feishu":{"enabled":false,"accounts":{}}}}"#,
+        )
+        .unwrap();
+
+        save_feishu_credentials_inner(
+            &data_dir.to_string_lossy(),
+            "test-app-id",
+            "test-app-secret",
+            Some("test-open-id"),
+            "openclaw",
+        )
+        .await
+        .unwrap();
+
+        let config: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(openclaw_dir.join("openclaw.json")).unwrap(),
+        )
+        .unwrap();
+        let pending = config["channels"]["feishu"]["accounts"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap();
+        assert_eq!(pending["allowFrom"][0].as_str(), Some("test-open-id"));
+        assert_eq!(pending["dmPolicy"].as_str(), Some("allowlist"));
+    }
+
+    #[test]
+    fn registration_credentials_prefer_feishu_app_fields_over_oauth_client_fields() {
+        let response = serde_json::json!({
+            "app_id": "cli_app",
+            "app_secret": "app_secret",
+            "client_id": "oauth_client",
+            "client_secret": "oauth_secret"
+        });
+
+        assert_eq!(
+            feishu_registration_credential_candidates(&response),
+            vec![
+                ("cli_app".to_string(), "app_secret".to_string()),
+                ("oauth_client".to_string(), "oauth_secret".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn registration_credentials_require_a_usable_feishu_websocket_endpoint() {
+        assert!(feishu_websocket_endpoint_is_usable(&serde_json::json!({
+            "code": 0,
+            "data": { "URL": "wss://example.test/callback" }
+        })));
+        assert!(!feishu_websocket_endpoint_is_usable(&serde_json::json!({
+            "code": 1000040346,
+            "msg": "app_id is invalid"
+        })));
+        assert!(!feishu_websocket_endpoint_is_usable(&serde_json::json!({
+            "code": 0,
+            "data": {}
+        })));
+    }
+
+    #[test]
+    fn registration_qr_url_uses_the_official_hermes_context_parameters() {
+        assert_eq!(
+            feishu_qr_url("https://accounts.feishu.cn/verify?device=abc"),
+            "https://accounts.feishu.cn/verify?device=abc&from=hermes&tp=hermes"
+        );
+        assert_eq!(
+            feishu_qr_url("https://accounts.feishu.cn/verify"),
+            "https://accounts.feishu.cn/verify?from=hermes&tp=hermes"
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn save_wechat_bot_token(data_dir: tauri::State<'_, crate::AppState>, bot_token: String, module_id: Option<String>) -> Result<String, String> {
     let dd = data_dir.inner().get_data_dir();
@@ -555,6 +730,110 @@ pub async fn uninstall_plugin_fw(data_dir: tauri::State<'_, crate::AppState>, pl
 // 飞书 Device Authorization Grant (RFC 8628) 快捷绑定
 // ============================================================
 static ACTIVE_FEISHU_QR: Mutex<Option<(String, String, String)>> = Mutex::new(None);
+const FEISHU_WEBSOCKET_ENDPOINT: &str = "https://open.feishu.cn/callback/ws/endpoint";
+
+fn feishu_qr_url(verification_uri: &str) -> String {
+    if verification_uri.contains('?') {
+        format!("{}&from=hermes&tp=hermes", verification_uri)
+    } else {
+        format!("{}?from=hermes&tp=hermes", verification_uri)
+    }
+}
+
+fn feishu_registration_credential_candidates(
+    response: &serde_json::Value,
+) -> Vec<(String, String)> {
+    let mut candidates = Vec::new();
+    for (id_key, secret_key) in [
+        ("app_id", "app_secret"),
+        ("appId", "appSecret"),
+        ("client_id", "client_secret"),
+    ] {
+        let Some(app_id) = response.get(id_key).and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let Some(app_secret) = response.get(secret_key).and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if app_id.is_empty()
+            || app_secret.is_empty()
+            || candidates.iter().any(|(known_id, known_secret)| {
+                known_id == app_id && known_secret == app_secret
+            })
+        {
+            continue;
+        }
+        candidates.push((app_id.to_string(), app_secret.to_string()));
+    }
+    candidates
+}
+
+fn feishu_websocket_endpoint_is_usable(response: &serde_json::Value) -> bool {
+    response.get("code").and_then(|code| code.as_i64()) == Some(0)
+        && response
+            .get("data")
+            .and_then(|data| data.get("URL"))
+            .and_then(|url| url.as_str())
+            .is_some_and(|url| !url.is_empty())
+}
+
+async fn validate_feishu_gateway_credential(
+    client: &reqwest::Client,
+    app_id: &str,
+    app_secret: &str,
+) -> Result<(), String> {
+    let response = client
+        .post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal")
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "app_id": app_id,
+            "app_secret": app_secret,
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("验证飞书应用凭据失败: {}", error))?;
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("解析飞书凭据验证响应失败: {}", error))?;
+    if body.get("code").and_then(|code| code.as_i64()) != Some(0) {
+        return Err("飞书凭据无法获取 tenant_access_token".into());
+    }
+
+    let response = client
+        .post(FEISHU_WEBSOCKET_ENDPOINT)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "AppID": app_id,
+            "AppSecret": app_secret,
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("验证飞书长连接凭据失败: {}", error))?;
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("解析飞书长连接验证响应失败: {}", error))?;
+    if feishu_websocket_endpoint_is_usable(&body) {
+        return Ok(());
+    }
+
+    let code = body
+        .get("code")
+        .and_then(|value| value.as_i64())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let message = body
+        .get("msg")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(": {}", value))
+        .unwrap_or_default();
+    Err(format!(
+        "飞书凭据无法建立长连接（错误码 {}{}）",
+        code, message
+    ))
+}
 
 /// 飞书快捷绑定 — 启动设备注册流程，返回 QR 码
 /// 使用飞书 OAuth Device Registration 端点: POST /oauth/v1/app/registration
@@ -573,8 +852,36 @@ pub async fn start_feishu_quick_bind(
         .build()
         .map_err(|e| format!("HTTP:{}", e))?;
 
-    // 飞书设备注册端点: POST https://accounts.feishu.cn/oauth/v1/app/registration
-    // 请求体为 form-urlencoded
+    let registration_url = "https://accounts.feishu.cn/oauth/v1/app/registration";
+    let init: serde_json::Value = client
+        .post(registration_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&[("action", "init")])
+        .send()
+        .await
+        .map_err(|e| format!("飞书设备注册初始化失败: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("解析飞书设备注册初始化响应失败: {}", e))?;
+    let supports_client_secret = init
+        .get("supported_auth_methods")
+        .and_then(|methods| methods.as_array())
+        .is_some_and(|methods| {
+            methods
+                .iter()
+                .any(|method| method.as_str() == Some("client_secret"))
+        });
+    if !supports_client_secret {
+        return Ok(DeviceAuthStart {
+            success: false,
+            qr_image_base64: String::new(),
+            device_code: String::new(),
+            expires_in: 0,
+            interval_ms: 0,
+            error: Some("飞书当前注册环境不支持 client_secret 快捷绑定".into()),
+        });
+    }
+
     let params = [
         ("action", "begin"),
         ("archetype", "PersonalAgent"),
@@ -583,7 +890,7 @@ pub async fn start_feishu_quick_bind(
     ];
 
     let resp: serde_json::Value = client
-        .post("https://accounts.feishu.cn/oauth/v1/app/registration")
+        .post(registration_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .form(&params)
         .send()
@@ -628,6 +935,8 @@ pub async fn start_feishu_quick_bind(
         });
     }
 
+    let verification_uri = feishu_qr_url(&verification_uri);
+
     let expires_in = resp.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(600);
     let interval = resp.get("interval").and_then(|v| v.as_u64()).unwrap_or(5);
 
@@ -661,6 +970,7 @@ pub async fn poll_feishu_quick_bind(
                     status: "expired".into(),
                     access_token: None,
                     client_secret: None,
+                    user_open_id: None,
                     message: Some("会话已过期，请重新发起绑定".into()),
                     error: None,
                 });
@@ -679,6 +989,7 @@ pub async fn poll_feishu_quick_bind(
     let params = [
         ("action", "poll"),
         ("device_code", effective_code),
+        ("tp", "ob_app"),
     ];
 
     let resp: serde_json::Value = client
@@ -692,15 +1003,46 @@ pub async fn poll_feishu_quick_bind(
         .await
         .map_err(|e| format!("解析:{}", e))?;
 
-    tracing::info!("[pf] feishu poll resp: {:?}", resp);
+    tracing::info!(
+        "[pf] feishu poll response: app_id={} client_id={} app_secret={} client_secret={} user_open_id={}",
+        resp.get("app_id").and_then(|value| value.as_str()).is_some_and(|value| !value.is_empty()),
+        resp.get("client_id").and_then(|value| value.as_str()).is_some_and(|value| !value.is_empty()),
+        resp.get("app_secret").and_then(|value| value.as_str()).is_some_and(|value| !value.is_empty()),
+        resp.get("client_secret").and_then(|value| value.as_str()).is_some_and(|value| !value.is_empty()),
+        resp.get("user_info").and_then(|value| value.get("open_id")).and_then(|value| value.as_str()).is_some_and(|value| !value.is_empty()),
+    );
 
     // 成功 — 获取到 app 凭证 + 用户信息
-    if let (Some(cid), Some(csec)) = (
-        resp.get("client_id").and_then(|v| v.as_str()),
-        resp.get("client_secret").and_then(|v| v.as_str()),
-    ) {
-        let app_id = cid.to_string();
-        let app_secret = csec.to_string();
+    if !feishu_registration_credential_candidates(&resp).is_empty() {
+        let mut valid_credentials = None;
+        let mut validation_errors = Vec::new();
+        for (candidate_id, candidate_secret) in feishu_registration_credential_candidates(&resp) {
+            match validate_feishu_gateway_credential(&client, &candidate_id, &candidate_secret).await {
+                Ok(()) => {
+                    valid_credentials = Some((candidate_id, candidate_secret));
+                    break;
+                }
+                Err(error) => validation_errors.push(error),
+            }
+        }
+        let Some((app_id, app_secret)) = valid_credentials else {
+            if let Ok(mut g) = ACTIVE_FEISHU_QR.lock() { *g = None; }
+            return Ok(DeviceAuthResult {
+                status: "error".into(),
+                access_token: None,
+                client_secret: None,
+                user_open_id: None,
+                message: None,
+                error: Some(format!(
+                    "飞书扫码返回的凭据不能用于消息网关长连接，未修改现有实例。{}",
+                    if validation_errors.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", validation_errors.join("；"))
+                    }
+                )),
+            });
+        };
 
         // 提取用户 open_id 用于自动白名单
         let user_open_id = resp
@@ -710,7 +1052,7 @@ pub async fn poll_feishu_quick_bind(
             .map(|s| s.to_string());
 
         // 保存凭证到配置文件（按模块写入对应配置）
-        let _ = save_feishu_credentials_inner(&dd, &app_id, &app_secret, user_open_id.as_deref(), &module_id).await;
+        save_feishu_credentials_inner(&dd, &app_id, &app_secret, user_open_id.as_deref(), &module_id).await?;
 
         if let Ok(mut g) = ACTIVE_FEISHU_QR.lock() { *g = None; }
 
@@ -718,6 +1060,7 @@ pub async fn poll_feishu_quick_bind(
             status: "success".into(),
             access_token: Some(app_id),
             client_secret: Some(app_secret),
+            user_open_id: user_open_id.clone(),
             message: Some(if user_open_id.is_some() { "授权成功，白名单已自动配置" } else { "授权成功" }.into()),
             error: None,
         });
@@ -730,6 +1073,7 @@ pub async fn poll_feishu_quick_bind(
                 status: "waiting".into(),
                 access_token: None,
                 client_secret: None,
+                user_open_id: None,
                 message: Some("等待扫码授权…".into()),
                 error: None,
             }),
@@ -737,6 +1081,7 @@ pub async fn poll_feishu_quick_bind(
                 status: "waiting".into(),
                 access_token: None,
                 client_secret: None,
+                user_open_id: None,
                 message: Some("轮询过快，请稍等…".into()),
                 error: None,
             }),
@@ -746,6 +1091,7 @@ pub async fn poll_feishu_quick_bind(
                     status: "expired".into(),
                     access_token: None,
                     client_secret: None,
+                    user_open_id: None,
                     message: Some("QR码已过期".into()),
                     error: None,
                 })
@@ -756,6 +1102,7 @@ pub async fn poll_feishu_quick_bind(
                     status: "denied".into(),
                     access_token: None,
                     client_secret: None,
+                    user_open_id: None,
                     message: Some("用户拒绝授权".into()),
                     error: None,
                 })
@@ -764,6 +1111,7 @@ pub async fn poll_feishu_quick_bind(
                 status: "error".into(),
                 access_token: None,
                 client_secret: None,
+                user_open_id: None,
                 message: None,
                 error: Some(error.to_string()),
             }),
@@ -773,6 +1121,7 @@ pub async fn poll_feishu_quick_bind(
             status: "waiting".into(),
             access_token: None,
             client_secret: None,
+            user_open_id: None,
             message: Some("等待中…".into()),
             error: None,
         })
@@ -789,13 +1138,31 @@ async fn save_feishu_credentials_inner(
 ) -> Result<(), String> {
     tracing::info!("[pf] save_feishu_creds: dd={} app_id={} module={} open_id={:?}", data_dir, app_id, module_id, user_open_id);
 
-    // 写入 instances.yaml
-    let inst_path = PathBuf::from(data_dir).join("config").join("instances.yaml");
+    // 迁移后实例按模块存储；仅在模块文件不存在时兼容读取旧版统一配置。
+    let module_instances_path = PathBuf::from(data_dir)
+        .join("config")
+        .join("modules")
+        .join(module_id)
+        .join("instances.yaml");
+    let legacy_instances_path = PathBuf::from(data_dir).join("config").join("instances.yaml");
+    let inst_path = if module_instances_path.is_file() {
+        module_instances_path
+    } else {
+        legacy_instances_path
+    };
     if inst_path.exists() {
         let content = tokio::fs::read_to_string(&inst_path).await.map_err(|e| format!("读取:{}", e))?;
         let mut doc: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| format!("解析:{}", e))?;
         if let Some(instances) = doc.get_mut("instances").and_then(|i| i.as_sequence_mut()) {
-            // 只写入第一个未配置凭证的 feishu 实例（避免覆盖已有独立凭证的实例）
+            let enabled_feishu_count = instances
+                .iter()
+                .filter(|inst| {
+                    inst.get("channel_type").and_then(|v| v.as_str()) == Some("feishu")
+                        && inst.get("enabled").and_then(|v| v.as_bool()) == Some(true)
+                })
+                .count();
+            // A quick rebind has no instance id. It may safely replace credentials
+            // only when the module has a single enabled Feishu instance.
             for inst in instances.iter_mut() {
                 if inst.get("channel_type").and_then(|v| v.as_str()) != Some("feishu") {
                     continue;
@@ -809,7 +1176,7 @@ async fn save_feishu_credentials_inner(
                     .and_then(|v| v.as_str())
                     .map(|s| !s.is_empty())
                     .unwrap_or(false);
-                if has_creds {
+                if has_creds && enabled_feishu_count != 1 {
                     continue; // 已有凭证，跳过（保留独立绑定）
                 }
                 if let Some(cc) = inst.get_mut("channel_config").and_then(|c| c.as_mapping_mut()) {
@@ -824,6 +1191,10 @@ async fn save_feishu_credentials_inner(
                     // 自动白名单（写入 YAML 数组格式）
                     if let Some(oid) = user_open_id {
                         if !oid.is_empty() {
+                            cc.insert(
+                                serde_yaml::Value::String("dmPolicy".into()),
+                                serde_yaml::Value::String("allowlist".into()),
+                            );
                             let current_allow: Vec<String> = cc
                                 .get(&serde_yaml::Value::String("allowFrom".into()))
                                 .and_then(|v| v.as_sequence())
@@ -885,6 +1256,7 @@ async fn save_feishu_credentials_inner(
                                         entry.insert("appSecret".into(), serde_json::json!(app_secret));
                                         if let Some(oid) = user_open_id.filter(|s| !s.is_empty()) {
                                             entry.insert("allowFrom".into(), serde_json::json!(vec![oid]));
+                                            entry.insert("dmPolicy".into(), serde_json::json!("allowlist"));
                                         }
                                         accts.insert(inst_id.to_string(), serde_json::json!(entry));
                                         tracing::info!("[pf] feishu account {} written to openclaw.json", inst_id);
@@ -904,9 +1276,13 @@ async fn save_feishu_credentials_inner(
                         // 无已有实例 → 存全局兜底
                         fs.insert("appId".into(), serde_json::json!(app_id));
                         fs.insert("appSecret".into(), serde_json::json!(app_secret));
-                        // 扫码绑定后默认开放所有用户（避免手动配对码），用户可事后在飞书开放平台限制
-                        fs.insert("allowFrom".into(), serde_json::json!(vec!["*"]));
-                        fs.insert("dmPolicy".into(), serde_json::json!("open"));
+                        let staged_allow = user_open_id
+                            .filter(|value| !value.is_empty())
+                            .map(|value| vec![value])
+                            .unwrap_or_else(|| vec!["*"]);
+                        let staged_policy = if user_open_id.is_some() { "allowlist" } else { "open" };
+                        fs.insert("allowFrom".into(), serde_json::json!(staged_allow));
+                        fs.insert("dmPolicy".into(), serde_json::json!(staged_policy));
                     }
                     // 无论全局如何，都创建独立 pending account 条目
                     if let Some(accts) = fs.get_mut("accounts").and_then(|a| a.as_object_mut()) {
@@ -915,8 +1291,13 @@ async fn save_feishu_credentials_inner(
                             let mut entry = serde_json::Map::new();
                             entry.insert("appId".into(), serde_json::json!(app_id));
                             entry.insert("appSecret".into(), serde_json::json!(app_secret));
-                            entry.insert("allowFrom".into(), serde_json::json!(vec!["*"]));
-                            entry.insert("dmPolicy".into(), serde_json::json!("open"));
+                            let staged_allow = user_open_id
+                                .filter(|value| !value.is_empty())
+                                .map(|value| vec![value])
+                                .unwrap_or_else(|| vec!["*"]);
+                            let staged_policy = if user_open_id.is_some() { "allowlist" } else { "open" };
+                            entry.insert("allowFrom".into(), serde_json::json!(staged_allow));
+                            entry.insert("dmPolicy".into(), serde_json::json!(staged_policy));
                             accts.insert(pending_key, serde_json::json!(entry));
                         }
                     }
@@ -939,6 +1320,7 @@ async fn save_feishu_credentials_inner(
         let updates = [
             ("FEISHU_APP_ID", app_id.to_string()),
             ("FEISHU_APP_SECRET", app_secret.to_string()),
+            ("FEISHU_CONNECTION_MODE", "websocket".to_string()),
         ];
         for (key, val) in &updates {
             if let Some(line_start) = env_content.find(&format!("{}=", key)) {

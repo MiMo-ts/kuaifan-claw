@@ -1,28 +1,28 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Pre-build openclaw-cn npm tarball, output openclaw-cn.tgz to this directory.
-    Execute once before building the installer, the output is placed in bundled-openclaw/openclaw-cn.tgz,
-    for tauri bundle to package into the installer,实现 "unzip and use" offline installation.
+    Pre-build openclaw npm tarball, output openclaw.tgz to this directory.
+    Execute once before building the installer, the output is placed in bundled-openclaw/openclaw.tgz,
+    for tauri bundle to package into the installer,瀹炵幇 "unzip and use" offline installation.
 
 .DESCRIPTION
     Dependencies: Node.js (any version, node + npm in PATH), pnpm (optional, if exists, priority).
-    Default to use domestic npmmirror (faster), automatically fallback to registry.npmjs.org if failed.
+    Uses the official npm registry by default.
     Process:
-      1. Priority npmmirror (domestic fast); fallback registry.npmjs.org
-      2. npm pack openclaw-cn@latest (or specified version) in temporary directory
+      1. Fetch from registry.npmjs.org
+      2. npm pack openclaw@latest (or specified version) in temporary directory
       3. Verify product size (should be > 1MB) to avoid pulling empty package
-      4. Move the output .tgz to openclaw-cn.tgz in this directory
+      4. Move the output .tgz to openclaw.tgz in this directory
       5. Clean up temporary directory
 
 .PARAMETER Version
-    Specify openclaw-cn version/tag (default is latest).
+    Specify openclaw version/tag (default is latest).
 
 .PARAMETER Registry
-    Specify npm registry (default is domestic npmmirror, fallback to npmjs.org).
+    Specify npm registry (default is registry.npmjs.org).
 
 .PARAMETER OutputFile
-    Output file name (default is ./openclaw-cn.tgz).
+    Output file name (default is ./openclaw.tgz).
 
 .EXAMPLE
     # Use default configuration (domestic mirror, fallback to npmjs.org)
@@ -32,22 +32,19 @@
     .\package-openclaw.ps1 -Version "1.2.3"
 
     # Specify custom registry
-    .\package-openclaw.ps1 -Registry "https://registry.npmmirror.com"
+    .\package-openclaw.ps1 -Registry "https://registry.npmjs.org"
 #>
 
 param(
     [string]$Version    = "latest",
-    [string]$Registry    = "https://registry.npmmirror.com",
-    [string]$OutputFile  = "$PSScriptRoot/openclaw-cn.tgz"
+    [string]$Registry    = "https://registry.npmjs.org",
+    [string]$OutputFile  = "$PSScriptRoot/openclaw.tgz"
 )
 
 $ErrorActionPreference = "Stop"
 
 # Domestic mirror priority, fallback list
-$RegistryFallbacks = @(
-    $Registry,
-    "https://registry.npmjs.org"
-)
+$RegistryFallbacks = @($Registry)
 
 $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-pack-$(Get-Random)"
 $selectedRegistry = $null
@@ -55,7 +52,7 @@ $packSucceeded = $false
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  openclaw-cn packaging script  " -ForegroundColor Cyan
+Write-Host "  openclaw packaging script  " -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Version       : $Version"
 Write-Host "Main Registry: $Registry"
@@ -97,7 +94,7 @@ try {
         $env:NPM_CONFIG_REGISTRY = $reg
 
         try {
-            $pkgSpec = if ($Version -eq "latest") { "openclaw-cn" } else { "openclaw-cn@$Version" }
+            $pkgSpec = if ($Version -eq "latest") { "openclaw" } else { "openclaw@$Version" }
             Write-Host "       Run: npm pack $pkgSpec --pack-destination $tmpDir" -ForegroundColor Gray
 
             $stdoutFile = Join-Path $tmpDir "npm-stdout.log"
@@ -143,27 +140,11 @@ try {
                 continue
             }
 
-            Write-Host "[Complete] Successfully pulled openclaw-cn@$Version from registry $reg" -ForegroundColor Green
+            Write-Host "[Complete] Successfully pulled openclaw@$Version from registry $reg" -ForegroundColor Green
 
             # Step 5: Move to target location
             Move-Item -Path $tgz.FullName -Destination $OutputFile -Force
             $finalSize = [math]::Round((Get-Item $OutputFile).Length / 1MB, 2)
-            
-            # Step 6: Encrypt output
-            $encryptScript = "$PSScriptRoot\..\scripts\encrypt-package.js"
-            if (Test-Path $encryptScript) {
-                Write-Host "[Encrypt] Encrypting output..." -ForegroundColor Cyan
-                $key = "OpenClaw-CN-Encryption-Key"  # Should get from environment variable or config file in actual use
-                try {
-                    & node $encryptScript $OutputFile $key
-                    Write-Host "[Success] Output encrypted successfully" -ForegroundColor Green
-                } catch {
-                    Write-Host "[Warning] Encryption failed, will use unencrypted output" -ForegroundColor Yellow
-                    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor DarkYellow
-                }
-            } else {
-                Write-Host "[Warning] Encryption script not found, will use unencrypted output" -ForegroundColor Yellow
-            }
             
             Write-Host ""
             Write-Host "========================================" -ForegroundColor Green

@@ -150,6 +150,38 @@ struct InstancesDocument {
     stats: serde_yaml::Value,
 }
 
+const MODULE_INSTANCE_IDS: &[&str] = &["openclaw", "hermes"];
+
+fn module_instances_path(data_dir: &str, module_id: &str) -> Result<PathBuf, String> {
+    if !MODULE_INSTANCE_IDS.contains(&module_id) {
+        return Err(format!("模块 '{}' 暂不支持实例存储", module_id));
+    }
+    Ok(PathBuf::from(data_dir)
+        .join("config")
+        .join("modules")
+        .join(module_id)
+        .join("instances.yaml"))
+}
+
+fn legacy_instances_path(data_dir: &str) -> PathBuf {
+    PathBuf::from(data_dir).join("config").join("instances.yaml")
+}
+
+fn legacy_instances_need_merge(
+    marker_modified: Option<std::time::SystemTime>,
+    legacy_modified: Option<std::time::SystemTime>,
+) -> bool {
+    match (marker_modified, legacy_modified) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(marker), Some(legacy)) => legacy > marker,
+    }
+}
+
+fn openclaw_channel_requires_gateway_restart(channel_type: &str) -> bool {
+    matches!(channel_type, "feishu" | "wechat_clawbot" | "qq" | "wxwork")
+}
+
 fn normalize_channel_config(v: serde_json::Value) -> serde_json::Value {
     match v {
         serde_json::Value::String(s) => {
@@ -248,6 +280,96 @@ async fn write_instances_document(
     Ok(())
 }
 
+pub(crate) async fn migrate_legacy_instances_to_modules(data_dir: &str) -> Result<(), String> {
+    let config_dir = PathBuf::from(data_dir).join("config");
+    let marker = config_dir.join("modules").join(".instances-migrated-v1");
+    let legacy_path = legacy_instances_path(data_dir);
+    if !legacy_path.exists() {
+        if !marker.exists() {
+            tokio::fs::create_dir_all(marker.parent().unwrap())
+                .await
+                .map_err(|e| format!("创建模块实例目录失败: {}", e))?;
+            tokio::fs::write(&marker, "no legacy instance file\n")
+                .await
+                .map_err(|e| format!("写入实例迁移标记失败: {}", e))?;
+        }
+        return Ok(());
+    }
+
+    let marker_modified = tokio::fs::metadata(&marker)
+        .await
+        .ok()
+        .and_then(|metadata| metadata.modified().ok());
+    let legacy_modified = tokio::fs::metadata(&legacy_path)
+        .await
+        .ok()
+        .and_then(|metadata| metadata.modified().ok());
+    if !legacy_instances_need_merge(marker_modified, legacy_modified) {
+        return Ok(());
+    }
+
+    let legacy = read_instances_document(&legacy_path.to_string_lossy()).await;
+    for module_id in MODULE_INSTANCE_IDS {
+        let module_path = module_instances_path(data_dir, module_id)?;
+        let mut module_doc = read_instances_document(&module_path.to_string_lossy()).await;
+        for instance in legacy
+            .instances
+            .iter()
+            .filter(|instance| instance.module_id == *module_id)
+        {
+            if !module_doc
+                .instances
+                .iter()
+                .any(|existing| existing.id == instance.id)
+            {
+                module_doc.instances.push(instance.clone());
+            }
+        }
+        write_instances_document(&module_path.to_string_lossy(), &module_doc).await?;
+    }
+
+    let backup_path = config_dir.join("instances.yaml.legacy");
+    if !backup_path.exists() {
+        tokio::fs::copy(&legacy_path, &backup_path)
+            .await
+            .map_err(|e| format!("备份旧实例配置失败: {}", e))?;
+    }
+    tokio::fs::write(&marker, "migrated\n")
+        .await
+        .map_err(|e| format!("写入实例迁移标记失败: {}", e))?;
+    Ok(())
+}
+
+async fn read_module_instances_document(
+    data_dir: &str,
+    module_id: &str,
+) -> Result<(PathBuf, InstancesDocument), String> {
+    migrate_legacy_instances_to_modules(data_dir).await?;
+    let path = module_instances_path(data_dir, module_id)?;
+    let doc = read_instances_document(&path.to_string_lossy()).await;
+    Ok((path, doc))
+}
+
+async fn find_module_instance_document(
+    data_dir: &str,
+    instance_id: &str,
+) -> Result<(PathBuf, InstancesDocument, Instance), String> {
+    migrate_legacy_instances_to_modules(data_dir).await?;
+    for module_id in MODULE_INSTANCE_IDS {
+        let path = module_instances_path(data_dir, module_id)?;
+        let doc = read_instances_document(&path.to_string_lossy()).await;
+        if let Some(instance) = doc
+            .instances
+            .iter()
+            .find(|instance| instance.id == instance_id)
+            .cloned()
+        {
+            return Ok((path, doc, instance));
+        }
+    }
+    Err(format!("未找到实例: {}", instance_id))
+}
+
 // ── openclaw.json extraDirs 清理工具 ─────────────────────────────────────────
 
 /// 读取 openclaw.json，从 skills.load.extraDirs 中移除所有包含指定机器人目录的条目
@@ -317,15 +439,23 @@ pub async fn list_instances(
     module_id: Option<String>,
 ) -> Result<Vec<Instance>, String> {
     let data_dir = data_dir.inner().get_data_dir();
-    let config_path = format!("{}/config/instances.yaml", data_dir);
-    let doc = read_instances_document(&config_path).await;
     Ok(match module_id {
-        Some(module_id) => doc
-            .instances
-            .into_iter()
-            .filter(|instance| instance.module_id == module_id)
-            .collect(),
-        None => doc.instances,
+        Some(module_id) => read_module_instances_document(&data_dir, &module_id)
+            .await?
+            .1
+            .instances,
+        None => {
+            let mut instances = Vec::new();
+            for module_id in MODULE_INSTANCE_IDS {
+                instances.extend(
+                    read_module_instances_document(&data_dir, module_id)
+                        .await?
+                        .1
+                        .instances,
+                );
+            }
+            instances
+        }
     })
 }
 
@@ -336,18 +466,16 @@ pub async fn get_instance(
     module_id: Option<String>,
 ) -> Result<Instance, String> {
     let data_dir = data_dir.inner().get_data_dir();
-    let config_path = format!("{}/config/instances.yaml", data_dir);
-    let doc = read_instances_document(&config_path).await;
-    doc.instances
-        .into_iter()
-        .find(|instance| {
-            instance.id == instance_id
-                && module_id
-                    .as_ref()
-                    .map(|module_id| instance.module_id == *module_id)
-                    .unwrap_or(true)
-        })
-        .ok_or_else(|| format!("未找到实例: {}", instance_id))
+    if let Some(module_id) = module_id {
+        return read_module_instances_document(&data_dir, &module_id)
+            .await?
+            .1
+            .instances
+            .into_iter()
+            .find(|instance| instance.id == instance_id)
+            .ok_or_else(|| format!("未找到实例: {}", instance_id));
+    }
+    Ok(find_module_instance_document(&data_dir, &instance_id).await?.2)
 }
 
 #[tauri::command]
@@ -369,7 +497,7 @@ pub async fn create_instance(
     if !matches!(module_id.as_str(), "openclaw" | "hermes") {
         return Err(format!("模块 '{}' 暂不支持创建实例", module_id));
     }
-    let config_path = format!("{}/config/instances.yaml", data_dir);
+    let config_path = module_instances_path(&data_dir, &module_id)?;
     let now = chrono::Utc::now().to_rfc3339();
 
     let instance_id = format!("inst_{}", chrono::Utc::now().timestamp_millis());
@@ -405,9 +533,10 @@ pub async fn create_instance(
         updated_at: now,
     };
 
-    let mut doc = read_instances_document(&config_path).await;
+    migrate_legacy_instances_to_modules(&data_dir).await?;
+    let mut doc = read_instances_document(&config_path.to_string_lossy()).await;
     doc.instances.push(instance.clone());
-    write_instances_document(&config_path, &doc).await?;
+    write_instances_document(&config_path.to_string_lossy(), &doc).await?;
 
     // 统一配置保存后，仅投影到所属模块的运行时配置。
     if let Err(e) = crate::commands::module::sync_module_configuration(&module_id, &data_dir).await {
@@ -417,10 +546,7 @@ pub async fn create_instance(
     if module_id == "hermes" {
         crate::commands::module::sync_hermes_platform_credentials(&data_dir).await;
     }
-    if module_id == "openclaw" && matches!(
-        instance.channel_type.as_str(),
-        "wechat_clawbot" | "qq" | "wxwork"
-    ) {
+    if module_id == "openclaw" && openclaw_channel_requires_gateway_restart(&instance.channel_type) {
         // 同步后若同步线内「停网关 → ensure 插件 → 等端口」可长达数分钟，前端会一直卡在「创建中」。
         // openclaw.json 已写入，改为后台重启；插件通道（微信 / QQ / 企业微信）在网关起来后生效。
         let dd = data_dir.clone();
@@ -457,9 +583,7 @@ pub async fn update_instance(
     info!("更新实例: {}", instance_id);
 
     let data_dir = data_dir.inner().get_data_dir();
-    let config_path = format!("{}/config/instances.yaml", data_dir);
-
-    let mut doc = read_instances_document(&config_path).await;
+    let (config_path, mut doc, _) = find_module_instance_document(&data_dir, &instance_id).await?;
     let inst = doc
         .instances
         .iter_mut()
@@ -495,14 +619,11 @@ pub async fn update_instance(
     inst.updated_at = chrono::Utc::now().to_rfc3339();
 
     let updated = inst.clone();
-    write_instances_document(&config_path, &doc).await?;
+    write_instances_document(&config_path.to_string_lossy(), &doc).await?;
 
     if let Err(e) = crate::commands::module::sync_module_configuration(&updated.module_id, &data_dir).await {
         warn!("更新实例后同步模块配置失败: {}", e);
-    } else if updated.module_id == "openclaw" && matches!(
-        updated.channel_type.as_str(),
-        "wechat_clawbot" | "qq" | "wxwork"
-    ) {
+    } else if updated.module_id == "openclaw" && openclaw_channel_requires_gateway_restart(&updated.channel_type) {
         let dd = data_dir.clone();
         let ch = updated.channel_type.clone();
         tokio::spawn(async move {
@@ -529,16 +650,7 @@ pub async fn delete_instance(
     info!("删除实例: {}", instance_id);
 
     let data_dir = data_dir.inner().get_data_dir();
-    let config_path = format!("{}/config/instances.yaml", data_dir);
-
-    // 从 YAML 读取当前实例（含 robot_id）
-    let doc = read_instances_document(&config_path).await;
-    let target = doc
-        .instances
-        .iter()
-        .find(|instance| instance.id == instance_id)
-        .cloned()
-        .ok_or_else(|| format!("未找到实例: {}", instance_id))?;
+    let (config_path, doc, target) = find_module_instance_document(&data_dir, &instance_id).await?;
     let robot_id = target.robot_id.clone();
 
     let n_before = doc.instances.len();
@@ -551,7 +663,7 @@ pub async fn delete_instance(
     // 删除前统计引用计数：修改后的 YAML 中该 robot_id 还剩几个实例
     let refs_after_delete = count_robot_refs(&doc.instances);
 
-    write_instances_document(&config_path, &doc).await?;
+    write_instances_document(&config_path.to_string_lossy(), &doc).await?;
 
     // 清理 openclaw extraDirs（不管引用计数，都要清除引用）
     if target.module_id == "openclaw" {
@@ -583,9 +695,7 @@ pub async fn toggle_instance(
     info!("切换实例 {} 状态: {}", instance_id, enabled);
 
     let data_dir = data_dir.inner().get_data_dir();
-    let config_path = format!("{}/config/instances.yaml", data_dir);
-
-    let mut doc = read_instances_document(&config_path).await;
+    let (config_path, mut doc, _) = find_module_instance_document(&data_dir, &instance_id).await?;
     let inst = doc
         .instances
         .iter_mut()
@@ -595,7 +705,7 @@ pub async fn toggle_instance(
     inst.updated_at = chrono::Utc::now().to_rfc3339();
     let module_id = inst.module_id.clone();
 
-    write_instances_document(&config_path, &doc).await?;
+    write_instances_document(&config_path.to_string_lossy(), &doc).await?;
 
     if let Err(e) = crate::commands::module::sync_module_configuration(&module_id, &data_dir).await {
         warn!("切换实例状态后同步模块配置失败: {}", e);
@@ -606,4 +716,26 @@ pub async fn toggle_instance(
         instance_id,
         if enabled { "启用" } else { "停用" }
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn imports_legacy_instances_only_when_the_legacy_file_changed_after_migration() {
+        let marker = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        assert!(!legacy_instances_need_merge(Some(marker), Some(marker)));
+        assert!(!legacy_instances_need_merge(Some(marker), Some(marker - Duration::from_secs(1))));
+        assert!(legacy_instances_need_merge(Some(marker), Some(marker + Duration::from_secs(1))));
+        assert!(legacy_instances_need_merge(None, Some(marker)));
+    }
+
+    #[test]
+    fn restarts_openclaw_for_feishu_channel_changes() {
+        assert!(openclaw_channel_requires_gateway_restart("feishu"));
+        assert!(openclaw_channel_requires_gateway_restart("wxwork"));
+        assert!(!openclaw_channel_requires_gateway_restart("telegram"));
+    }
 }

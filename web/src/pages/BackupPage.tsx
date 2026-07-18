@@ -108,7 +108,7 @@ export default function BackupPage() {
           <p className="text-sm" style={{ color: "var(--cx-accent-text)" }}>
             <strong>备份内容：</strong>
             当前包含管理端 <code className="px-1 rounded" style={{ background: "rgba(88,166,255,0.15)" }}>config/</code> 下所有文件以及
-            <code className="px-1 rounded" style={{ background: "rgba(88,166,255,0.15)" }}>openclaw-cn/openclaw.json</code>。
+            <code className="px-1 rounded" style={{ background: "rgba(88,166,255,0.15)" }}>openclaw/openclaw.json</code>。
           </p>
         </div>
 

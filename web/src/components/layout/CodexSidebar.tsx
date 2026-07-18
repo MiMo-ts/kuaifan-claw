@@ -320,7 +320,7 @@ export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: 
               快泛 Claw
             </span>
             <span className="text-[9.5px] font-mono" style={{ color: "var(--cx-text-dim)", letterSpacing: "0.04em" }}>
-              v1.0.24
+              v1.0.53
             </span>
           </div>
         </button>

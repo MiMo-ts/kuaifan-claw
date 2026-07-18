@@ -799,7 +799,7 @@ pub fn unpack_npm_tarball(bytes: &[u8], dest_dir: &Path) -> Result<(), String> {
 }
 
 /// 管理器拉取 GitHub 归档时的 User-Agent（避免部分镜像返回 403）
-pub const OPENCLAW_MANAGER_UA: &str = "openclaw-cn-manager/1.0";
+pub const OPENCLAW_MANAGER_UA: &str = "kuaifanclaw-openclaw-manager/1.0";
 
 /// 并发探测多个镜像的响应速度，返回最快可达的 URL（5 秒超时）
 pub async fn probe_best_mirror(urls: &[String], stage: &str, app: &AppHandle) -> Option<String> {
@@ -1000,18 +1000,18 @@ pub fn github_owner_repo_from_url_or_path(s: &str) -> Option<String> {
     }
 }
 
-/// 从 `OPENCLAW_SKILLS_STANDALONE_BASE`（如 `https://github.com/openclaw-cn`）解析 GitHub 用户名/组织名
+/// 从 `OPENCLAW_SKILLS_STANDALONE_BASE`（如 `https://github.com/openclaw`）解析 GitHub 用户名/组织名
 pub fn github_org_from_skills_standalone_base(base: &str) -> String {
     let t = base.trim();
     if t.is_empty() {
-        return "openclaw-cn".to_string();
+        return "openclaw".to_string();
     }
     match github_owner_repo_from_url_or_path(t) {
         Some(s) => s
             .split_once('/')
             .map(|(org, _)| org.to_string())
             .unwrap_or(s),
-        None => "openclaw-cn".to_string(),
+        None => "openclaw".to_string(),
     }
 }
 

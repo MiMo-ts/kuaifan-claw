@@ -36,11 +36,23 @@ export interface HermesLocalAttachment {
 export interface HermesToolCall {
   id: string;
   name: string;
+  // Human-readable label built by Hermes from the tool name + args
+  // (e.g. "Asked a question", "Opened www.douyin.com", "Ran agent-browser
+  // install"). This is the same `context` field the native Hermes desktop
+  // renders as the per-step heading in its activity timeline; without it
+  // every tool call collapses to a bare `name` chip ("browser_navigate")
+  // and the user can't see what the agent actually did.
+  context?: string;
+  // The tool.start payload also carries a redacted pretty-printed JSON
+  // dump of the args (in verbose mode). Captured for the collapsible
+  // "show details" panel.
+  argsText?: string;
   args?: unknown;
   result?: string;
   status: "running" | "done" | "error";
   startedAt: number;
   finishedAt?: number;
+  durationS?: number;
 }
 
 export interface HermesMessage {
@@ -54,6 +66,7 @@ export interface HermesMessage {
   toolCalls?: HermesToolCall[];
   attachments?: HermesAttachment[];
   errorMessage?: string;
+  reasoningTokens?: number;
 }
 
 export interface HermesSession {
@@ -74,6 +87,7 @@ export interface HermesSettings {
   profile?: string;
   workspace?: string;
   availableModels?: Array<{ id: string; label: string; provider?: string }>;
+  reasoningEffort?: "off" | "low" | "medium" | "high" | "xhigh";
 }
 
 // Events normalized from the Hermes JSON-RPC WebSocket.
@@ -81,11 +95,17 @@ export type HermesStreamEvent =
   | { type: "delta"; text: string }
   | { type: "reasoning"; text: string }
   | { type: "tool_call"; toolCall: HermesToolCall }
-  | { type: "tool_result"; toolCallId: string; result: string }
-  | { type: "final"; messageId?: string; text?: string; status?: string }
+  | {
+    type: "tool_result";
+    toolCallId: string;
+    result: string;
+    status?: "done" | "error";
+    durationS?: number;
+  }
+  | { type: "final"; messageId?: string; text?: string; status?: string; reasoningTokens?: number }
   | { type: "aborted" }
   | { type: "error"; message: string }
-  | { type: "meta"; model?: string; title?: string };
+  | { type: "meta"; model?: string; title?: string; reasoningTokens?: number; reasoningEffort?: string };
 
 export interface HermesStartChatPayload {
   sessionId?: string;

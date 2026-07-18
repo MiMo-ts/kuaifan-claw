@@ -15,7 +15,10 @@ import {
   type HermesStreamHandle,
 } from "../services/hermesApi";
 import { extractAssistantAttachments } from "../services/hermesAttachments";
-import { mergeAuthoritativeMessages, parseHermesSlashCommand } from "../services/hermesProtocol";
+import {
+  mergeAuthoritativeMessages,
+  parseHermesSlashCommand,
+} from "../services/hermesProtocol";
 import { useModuleSessionStore } from "../stores/moduleSessionStore";
 import type { HermesAttachment, HermesLocalAttachment, HermesMessage, HermesSession, HermesSettings } from "../types/hermes";
 
@@ -83,8 +86,14 @@ export const HermesPage: React.FC<HermesPageProps> = ({
       setSessions(await client.listSessions());
       setConnectionOk(true);
     } catch (error) {
-      setConnectionOk(false);
-      console.warn("[Hermes] listSessions failed", error);
+      console.warn("[Hermes] listSessions failed, retrying in 3s...", error);
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        setSessions(await client.listSessions());
+        setConnectionOk(true);
+      } catch {
+        setConnectionOk(false);
+      }
     } finally {
       setSessionsLoading(false);
     }
@@ -114,6 +123,7 @@ export const HermesPage: React.FC<HermesPageProps> = ({
     }
     void loadSessions();
     void client.getSettings().then(setSettings).catch(() => undefined);
+    void client.health().then(setConnectionOk);
   }, [running, client, loadSessions]);
 
   useEffect(() => {
@@ -213,9 +223,10 @@ export const HermesPage: React.FC<HermesPageProps> = ({
                   toolCall.id === event.toolCallId
                     ? {
                         ...toolCall,
-                        result: event.result,
-                        status: "done" as const,
+                        result: event.result || toolCall.result,
+                        status: event.status || "done",
                         finishedAt: Date.now(),
+                        durationS: event.durationS ?? toolCall.durationS,
                       }
                     : toolCall,
                 ),

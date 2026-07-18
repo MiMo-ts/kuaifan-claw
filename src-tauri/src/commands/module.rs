@@ -61,6 +61,29 @@ fn module_gateway_log_path(data_dir: &str, module_id: &str) -> Result<PathBuf, S
     }
 }
 
+fn module_gateway_log_paths(data_dir: &str, module_id: &str) -> Result<Vec<PathBuf>, String> {
+    if module_id != "hermes" {
+        return Ok(vec![module_gateway_log_path(data_dir, module_id)?]);
+    }
+    let fallback = module_gateway_log_path(data_dir, module_id)?;
+    let Some(log_dir) = fallback.parent() else {
+        return Ok(vec![fallback]);
+    };
+    let mut paths = std::fs::read_dir(log_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("log"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    if paths.is_empty() {
+        paths.push(fallback);
+    }
+    Ok(paths)
+}
+
 fn tail_lines(content: &str, max_lines: usize) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
@@ -218,6 +241,7 @@ fn apply_hermes_model_projection(
 }
 
 async fn sync_hermes_configuration(data_dir: &str) -> Result<(), String> {
+    crate::commands::instance::migrate_legacy_instances_to_modules(data_dir).await?;
     crate::commands::model::ensure_models_yaml_api_keys_are_plaintext(data_dir).await?;
 
     let module_dir = PathBuf::from(data_dir).join("modules").join("hermes");
@@ -258,7 +282,11 @@ async fn sync_hermes_configuration(data_dir: &str) -> Result<(), String> {
         tracing::info!("[module] Hermes config synced to {}", hermes_home_config.display());
     }
 
-    let instances_path = PathBuf::from(data_dir).join("config").join("instances.yaml");
+    let instances_path = PathBuf::from(data_dir)
+        .join("config")
+        .join("modules")
+        .join("hermes")
+        .join("instances.yaml");
     let all_instances = tokio::fs::read_to_string(instances_path).await.unwrap_or_default();
     let instances: Vec<Instance> = serde_yaml::from_str::<serde_yaml::Value>(&all_instances)
         .ok()
@@ -266,7 +294,6 @@ async fn sync_hermes_configuration(data_dir: &str) -> Result<(), String> {
         .and_then(|value| serde_yaml::from_value::<Vec<Instance>>(value).ok())
         .unwrap_or_default()
         .into_iter()
-        .filter(|instance: &Instance| instance.module_id == "hermes")
         .collect();
     let instances_yaml = serde_yaml::to_string(&serde_yaml::to_value(serde_json::json!({
         "module_id": "hermes",
@@ -293,9 +320,55 @@ pub async fn sync_all_module_configurations(data_dir: &str) -> Result<(), String
     sync_module_configuration("hermes", data_dir).await
 }
 
+fn project_hermes_feishu_env(env: &str, config: Option<&serde_yaml::Value>) -> String {
+    let mut projected = env.to_string();
+    if let Some(app_id) = config.and_then(|value| value.get("appId")).and_then(|value| value.as_str()) {
+        projected = set_env_line(&projected, "FEISHU_APP_ID", app_id);
+    }
+    if let Some(app_secret) = config.and_then(|value| value.get("appSecret")).and_then(|value| value.as_str()) {
+        projected = set_env_line(&projected, "FEISHU_APP_SECRET", app_secret);
+    }
+
+    let allowed_users = config
+        .and_then(|value| value.get("allowFrom"))
+        .and_then(|value| value.as_sequence())
+        .map(|users| {
+            users
+                .iter()
+                .filter_map(|user| user.as_str())
+                .map(str::trim)
+                .filter(|user| !user.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let allow_all = allowed_users.is_empty() || allowed_users.iter().any(|user| *user == "*");
+    let allowed_users = if allow_all {
+        String::new()
+    } else {
+        allowed_users.join(",")
+    };
+
+    projected = set_env_line(&projected, "FEISHU_ALLOWED_USERS", &allowed_users);
+    projected = set_env_line(
+        &projected,
+        "FEISHU_ALLOW_ALL_USERS",
+        if allow_all { "true" } else { "false" },
+    );
+    projected = set_env_line(&projected, "FEISHU_CONNECTION_MODE", "websocket");
+    projected
+}
+
 /// 将 Hermes 实例的平台凭证同步到 .env（飞书→FEISHU_APP_ID/SECRET, 钉钉→DINGTALK_CLIENT_ID/SECRET, 微信→WEIXIN_TOKEN）
 pub async fn sync_hermes_platform_credentials(data_dir: &str) {
-    let instances_path = PathBuf::from(data_dir).join("config").join("instances.yaml");
+    if let Err(error) = crate::commands::instance::migrate_legacy_instances_to_modules(data_dir).await {
+        tracing::warn!("[module] Hermes instance migration failed: {}", error);
+        return;
+    }
+    let instances_path = PathBuf::from(data_dir)
+        .join("config")
+        .join("modules")
+        .join("hermes")
+        .join("instances.yaml");
     let all_instances = match tokio::fs::read_to_string(&instances_path).await {
         Ok(s) => s,
         Err(_) => return,
@@ -306,10 +379,7 @@ pub async fn sync_hermes_platform_credentials(data_dir: &str) {
         .and_then(|v| serde_yaml::from_value::<Vec<serde_yaml::Value>>(v).ok())
         .unwrap_or_default()
         .into_iter()
-        .filter(|inst| {
-            inst.get("module_id").and_then(|v| v.as_str()) == Some("hermes")
-                && inst.get("enabled").and_then(|v| v.as_bool()) == Some(true)
-        })
+        .filter(|inst| inst.get("enabled").and_then(|v| v.as_bool()) == Some(true))
         .collect();
 
     let env_dir = PathBuf::from(data_dir).join("modules").join("hermes");
@@ -322,13 +392,7 @@ pub async fn sync_hermes_platform_credentials(data_dir: &str) {
         let config = inst.get("channel_config");
         match channel {
             "feishu" => {
-                if let Some(app_id) = config.and_then(|c| c.get("appId").and_then(|v| v.as_str())) {
-                    env = set_env_line(&env, "FEISHU_APP_ID", app_id);
-                }
-                if let Some(app_secret) = config.and_then(|c| c.get("appSecret").and_then(|v| v.as_str())) {
-                    env = set_env_line(&env, "FEISHU_APP_SECRET", app_secret);
-                }
-                env = set_env_line(&env, "FEISHU_ALLOWED_USERS", "*");
+                env = project_hermes_feishu_env(&env, config);
                 env = set_env_line(&env, "FEISHU_DM_POLICY", "open");
                 env = set_env_line(&env, "FEISHU_HOME_CHANNEL", "auto");
             }
@@ -403,13 +467,17 @@ pub async fn read_module_logs_tail(
 ) -> Result<RuntimeLogsTail, String> {
     let data_dir = data_dir.inner().get_data_dir();
     let max_lines = lines.unwrap_or(400).clamp(50, 3000);
-    let gateway_path = module_gateway_log_path(&data_dir, &module_id)?;
+    let gateway_paths = module_gateway_log_paths(&data_dir, &module_id)?;
     let manager_path = PathBuf::from(&data_dir).join("logs").join("app.log");
-    let gateway = tokio::fs::read_to_string(gateway_path).await.unwrap_or_default();
+    let mut gateway_sections = Vec::new();
+    for path in gateway_paths {
+        let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+        gateway_sections.push(format!("===== {} =====\n{}", path.file_name().and_then(|name| name.to_str()).unwrap_or("hermes.log"), tail_lines(&content, max_lines)));
+    }
     let manager = tokio::fs::read_to_string(manager_path).await.unwrap_or_default();
 
     Ok(RuntimeLogsTail {
-        gateway: tail_lines(&gateway, max_lines),
+        gateway: gateway_sections.join("\n\n"),
         manager: tail_lines(&manager, max_lines),
     })
 }
@@ -420,15 +488,16 @@ pub async fn clear_module_gateway_log(
     module_id: String,
 ) -> Result<String, String> {
     let data_dir = data_dir.inner().get_data_dir();
-    let path = module_gateway_log_path(&data_dir, &module_id)?;
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
+    for path in module_gateway_log_paths(&data_dir, &module_id)? {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| format!("创建日志目录失败: {}", error))?;
+        }
+        tokio::fs::write(path, "")
             .await
-            .map_err(|error| format!("创建日志目录失败: {}", error))?;
+            .map_err(|error| format!("清空模块网关日志失败: {}", error))?;
     }
-    tokio::fs::write(path, "")
-        .await
-        .map_err(|error| format!("清空模块网关日志失败: {}", error))?;
     Ok(format!("{} 网关日志已清空", module_id))
 }
 
@@ -545,5 +614,44 @@ providers:
             .and_then(serde_yaml::Value::as_bool);
 
         assert_eq!(supports_vision, Some(true));
+    }
+
+    #[test]
+    fn hermes_feishu_env_preserves_scanned_user_allowlist() {
+        let channel_config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+appId: cli_test
+appSecret: secret
+allowFrom:
+  - ou_scanned_user
+"#,
+        )
+        .unwrap();
+
+        let env = project_hermes_feishu_env(
+            "FEISHU_ALLOWED_USERS=*\nFEISHU_DM_POLICY=open\n",
+            Some(&channel_config),
+        );
+
+        assert!(env.contains("FEISHU_ALLOWED_USERS=ou_scanned_user"));
+        assert!(env.contains("FEISHU_ALLOW_ALL_USERS=false"));
+        assert!(!env.contains("FEISHU_ALLOWED_USERS=*"));
+    }
+
+    #[test]
+    fn hermes_feishu_env_uses_official_allow_all_flag_without_an_allowlist() {
+        let channel_config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+appId: cli_test
+appSecret: secret
+"#,
+        )
+        .unwrap();
+
+        let env = project_hermes_feishu_env("FEISHU_ALLOWED_USERS=*\n", Some(&channel_config));
+
+        assert!(env.contains("FEISHU_ALLOWED_USERS=\n"));
+        assert!(env.contains("FEISHU_ALLOW_ALL_USERS=true"));
+        assert!(!env.contains("FEISHU_ALLOWED_USERS=*"));
     }
 }

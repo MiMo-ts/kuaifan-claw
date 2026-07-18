@@ -7,7 +7,7 @@ use tokio_tungstenite::{
     connect_async, tungstenite::client::IntoClientRequest, tungstenite::Message,
 };
 
-const GATEWAY_PROTOCOL: i64 = 3;
+const GATEWAY_PROTOCOL: i64 = 4;
 
 /// 连接本机网关、完成 `connect` 握手后调用一条 `method`，返回成功时的 `payload`（JSON）。
 pub async fn call_gateway_method(
@@ -103,7 +103,7 @@ pub async fn call_gateway_chat(
     req.headers_mut().insert("Authorization", format!("Bearer {}", token).parse().map_err(|e| format!("Authorization 头无效: {}", e))?);
     let (mut ws, _) = connect_async(req).await.map_err(|e| format!("连接网关 WS 失败: {}", e))?;
     let _ = read_until_frame(&mut ws, |v| v.get("type").and_then(|t| t.as_str()) == Some("event")).await?;
-    let connect_body = json!({"type":"req","id":"mgr-connect-1","method":"connect","params":{"minProtocol":3,"maxProtocol":3,"client":{"id":"cli","version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"mode":"cli"},"role":"operator","auth":{"token":token}}});
+    let connect_body = json!({"type":"req","id":"mgr-connect-1","method":"connect","params":{"minProtocol":4,"maxProtocol":4,"client":{"id":"cli","version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"mode":"cli"},"role":"operator","auth":{"token":token}}});
     send_text(&mut ws, &connect_body.to_string()).await?;
     let connect_res = read_response_payload(&mut ws, "mgr-connect-1").await?;
     if !connect_res.ok { return Err(format!("握手失败: {}", connect_res.error.map(|e| e.to_string()).unwrap_or_default())); }

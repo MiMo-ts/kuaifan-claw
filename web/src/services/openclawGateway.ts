@@ -133,11 +133,11 @@ export class OpenClawGateway {
       id,
       method: 'connect',
       params: {
-        minProtocol: 3,
-        maxProtocol: 3,
+        minProtocol: 4,
+        maxProtocol: 4,
         client: {
-          id: 'clawdbot-control-ui',
-          version: '1.0.0',
+          id: 'openclaw-control-ui',
+          version: 'control-ui',
           platform: navigator.platform?.startsWith('Win') ? 'win32' :
                     navigator.platform?.startsWith('Mac') ? 'darwin' : 'linux',
           mode: 'webchat',

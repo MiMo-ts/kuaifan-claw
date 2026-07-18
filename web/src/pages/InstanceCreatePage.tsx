@@ -9,6 +9,7 @@ import {
   CxIconSparkles,
 } from "../components/icons";
 import CreateInstance from '../components/wizard/CreateInstance';
+import { useAppStore } from '../stores/appStore';
 
 interface RobotTemplate {
   id: string;
@@ -33,6 +34,7 @@ const C = {
 
 export default function InstanceCreatePage() {
   const navigate = useNavigate();
+  const activeModule = useAppStore((state) => state.activeModule);
   const [searchParams] = useSearchParams();
   const robotId = searchParams.get('robotId');
   const [selectedRobot, setSelectedRobot] = useState<RobotTemplate | null>(null);
@@ -119,6 +121,7 @@ export default function InstanceCreatePage() {
               onPrev={() => navigate('/robots')}
               selectedRobot={selectedRobot}
               isLastStep
+              moduleId={activeModule}
             />
           </section>
         )}

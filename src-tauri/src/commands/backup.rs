@@ -91,7 +91,7 @@ fn zip_dir_recursive(
             )
         };
 
-        // config/openclaw/openclaw.json 与 openclaw-cn/openclaw.json 内容相同（后者是实际使用的运行文件），
+        // config/openclaw/openclaw.json 与 openclaw/openclaw.json 内容相同（后者是实际使用的运行文件），
         // 打包时会以 openclaw/openclaw.json 形式出现，与后面显式写入的 openclaw/openclaw.json 重名冲突，
         // 所以跳过这一文件，保留 config/openclaw/ 下其他内容（instances.yaml / models.yaml 等）。
         let key = zip_entry_key(&name_in_zip);
@@ -147,12 +147,12 @@ pub async fn create_backup(
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let mut seen_zip_names: HashSet<String> = HashSet::new();
 
-    // 递归打包 config/（含子目录）以及 openclaw-cn/openclaw.json
+    // 递归打包 config/（含子目录）以及 openclaw/openclaw.json
     if std::path::Path::new(&config_dir).exists() {
         zip_dir_recursive(&mut zip, options, &config_dir, "", &mut seen_zip_names)?;
     }
 
-    let openclaw_cfg = format!("{}/openclaw-cn/openclaw.json", data_dir);
+    let openclaw_cfg = format!("{}/openclaw/openclaw.json", data_dir);
     if std::path::Path::new(&openclaw_cfg).exists() {
         let content = tokio::fs::read(&openclaw_cfg)
             .await
@@ -281,7 +281,7 @@ pub async fn restore_backup(
 
     // 恢复 openclaw/openclaw.json（全程同步，避免 ZipFile 跨 await 导致 Future 非 Send）
     // 恢复后清理旧版 systemPrompt 键，防止网关启动报 "Unrecognized key: systemPrompt"
-    let openclaw_dir = format!("{}/openclaw-cn", data_dir);
+    let openclaw_dir = format!("{}/openclaw", data_dir);
     let openclaw_path = format!("{}/openclaw.json", openclaw_dir);
     let openclaw_entry = "openclaw/openclaw.json";
     let file2 = File::open(&backup_path).map_err(|e| format!("打开备份文件失败: {}", e))?;
@@ -399,7 +399,7 @@ pub async fn import_config(
         if filename.ends_with('/') {
             continue;
         }
-        // 跳过 openclaw/openclaw.json，由下面单独写入 openclaw-cn/
+        // 跳过 openclaw/openclaw.json，由下面单独写入 openclaw/
         let lower = filename.to_lowercase();
         if lower == "openclaw/openclaw.json" || lower.ends_with("/openclaw/openclaw.json") {
             continue;
@@ -428,7 +428,7 @@ pub async fn import_config(
     }
 
     // 恢复 openclaw/openclaw.json 并清理 systemPrompt（与 restore_backup 保持一致）
-    let openclaw_dir = format!("{}/openclaw-cn", data_dir);
+    let openclaw_dir = format!("{}/openclaw", data_dir);
     let openclaw_path = format!("{}/openclaw.json", openclaw_dir);
     let openclaw_entry = "openclaw/openclaw.json";
     let file2 = File::open(&dest_path).map_err(|e| format!("打开备份文件失败: {}", e))?;

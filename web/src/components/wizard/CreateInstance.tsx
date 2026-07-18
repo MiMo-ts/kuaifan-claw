@@ -1092,7 +1092,13 @@ export default function CreateInstance({ onComplete, onPrev, selectedRobot, modu
           onComplete={(data: QuickBindCompleteData) => {
             setQuickBindOpen(false);
             if (data.appId && data.appSecret) {
-              setChannelConfig(prev => ({ ...prev, appId: data.appId!, appSecret: data.appSecret! }));
+              setChannelConfig(prev => ({
+                ...prev,
+                appId: data.appId!,
+                appSecret: data.appSecret!,
+                allowFrom: data.allowFrom ?? prev.allowFrom,
+                dmPolicy: data.dmPolicy ?? prev.dmPolicy,
+              }));
               toast.success('飞书绑定成功，凭证已自动填入');
             } else {
               toast.error('绑定成功但未获取到完整凭证，请手动填写');

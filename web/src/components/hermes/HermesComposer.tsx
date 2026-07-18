@@ -58,7 +58,7 @@ export const HermesComposer: React.FC<HermesComposerProps> = ({
         id: `attachment-${Date.now()}-${crypto.randomUUID()}`,
         file,
         previewUrl,
-        kind: classifyAttachment(file.type),
+        kind: classifyAttachment(file.type, file.name),
         state: "uploading" as const,
       };
     });

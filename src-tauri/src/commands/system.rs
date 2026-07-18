@@ -106,7 +106,7 @@ pub async fn open_openclaw_config(
     data_dir: tauri::State<'_, crate::AppState>,
 ) -> Result<String, String> {
     let data_dir = data_dir.inner().get_data_dir();
-    let openclaw_dir = format!("{}/openclaw-cn", data_dir);
+    let openclaw_dir = format!("{}/openclaw", data_dir);
     let config_path = format!("{}/openclaw.json", openclaw_dir);
 
     // 保证目录存在

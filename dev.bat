@@ -2,11 +2,10 @@
 chcp 65001 >nul
 
 REM ============================================================
-REM OpenClaw-CN Manager - Development startup script
+REM OpenClaw Manager - Development startup script
 REM ============================================================
 REM How it works:
-REM   npm run tauri:dev runs:
-REM     cd ..\src-tauri && node ..\web\node_modules\@tauri-apps\cli\tauri.js dev
+REM   npm run tauri:dev runs from src-tauri/ so Tauri finds tauri.conf.json.
 REM   - cd switches to src-tauri/ (npm script changes cwd via cd)
 REM   - node runs tauri.js directly (avoids npx PATH lookup)
 REM   - beforeDevCommand: npm --prefix ../web run dev（相对 src-tauri）
@@ -15,8 +14,8 @@ REM     这样开发态走 devUrl（127.0.0.1:5173）连 Vite；直接 cargo bui
 REM ============================================================
 
 REM ---- Stop previous debug exe (otherwise Cargo: failed to remove ... os error 5) ----
-echo [dev.bat] Stopping any running openclaw-cn-manager.exe (tray / background)...
-taskkill /F /IM openclaw-cn-manager.exe >nul 2>&1
+echo [dev.bat] Stopping any running development app (tray / background)...
+taskkill /F /IM 快泛claw.exe >nul 2>&1
 
 REM ---- Handle Vite port 5173 conflict ---------------------------------
 for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":5173 " ^| findstr "LISTENING"') do (

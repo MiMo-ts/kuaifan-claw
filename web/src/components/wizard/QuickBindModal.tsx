@@ -22,6 +22,7 @@ interface QuickBindPollResult {
   status: string;
   access_token?: string;
   client_secret?: string;
+  user_open_id?: string;
   bot_token?: string;
   message?: string;
   error?: string;
@@ -30,6 +31,8 @@ interface QuickBindPollResult {
 export interface QuickBindCompleteData {
   appId?: string;
   appSecret?: string;
+  allowFrom?: string;
+  dmPolicy?: string;
   authCode?: string;
 }
 
@@ -127,6 +130,8 @@ export default function QuickBindModal({ platform, onComplete, onCancel }: Props
           successDataRef.current = {
             appId: result.access_token,
             appSecret: result.client_secret,
+            allowFrom: result.user_open_id,
+            dmPolicy: result.user_open_id ? 'allowlist' : undefined,
             authCode: result.bot_token,
           };
           setPhase('done');

@@ -8,6 +8,7 @@ import {
 } from "../icons";
 import type { HermesMessage as HermesMessageType, HermesToolCall } from "../../types/hermes";
 import { HermesAttachmentPreview } from "./HermesAttachmentPreview";
+import { cleanThinkingText, formatHermesToolArgs, hasMeaningfulReasoning } from "../../services/hermesProtocol";
 
 function formatTime(timestamp: number): string {
   if (!timestamp) return "";
@@ -17,7 +18,12 @@ function formatTime(timestamp: number): string {
   });
 }
 
-const ToolState: React.FC<{ toolCall: HermesToolCall }> = ({ toolCall }) => {
+// Single tool-call step. Renders a vertical timeline entry mirroring the
+// native Hermes desktop: icon + readable heading ("Opened www.douyin.com",
+// "Asked a question", "Ran agent-browser install") + an optional
+// collapsed result panel. This is what users see in place of a bare
+// browser_navigate chip when Hermes forwards `context` on tool.start.
+const ToolStep: React.FC<{ toolCall: HermesToolCall }> = ({ toolCall }) => {
   const Icon = toolCall.status === "running"
     ? CxIconLoader
     : toolCall.status === "error"
@@ -28,15 +34,60 @@ const ToolState: React.FC<{ toolCall: HermesToolCall }> = ({ toolCall }) => {
     : toolCall.status === "done"
       ? "var(--cx-success)"
       : "var(--cx-text-mute)";
+  const heading = (toolCall.context && toolCall.context.trim())
+    || toolCall.name
+    || "tool";
+  const argsSummary = toolCall.argsText || formatHermesToolArgs(toolCall.args);
+  const hasDetail = Boolean(toolCall.result);
 
   return (
-    <span
-      className="inline-flex h-6 items-center gap-1.5 rounded border px-2 text-[10.5px]"
-      style={{ background: "var(--cx-bg-soft)", borderColor: "var(--cx-border-soft)", color }}
+    <div
+      className="flex gap-2 border-l-2 pl-2.5 py-1.5 text-[12.5px]"
+      style={{ borderColor: toolCall.status === "error" ? "var(--cx-error)" : toolCall.status === "done" ? "var(--cx-success)" : "var(--cx-border-soft)" }}
     >
-      <Icon className={`h-3 w-3 ${toolCall.status === "running" ? "animate-spin" : ""}`} />
-      {toolCall.name}
-    </span>
+      <Icon
+        className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${toolCall.status === "running" ? "animate-spin" : ""}`}
+        style={{ color }}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate font-medium" style={{ color: "var(--cx-text)" }}>
+            {heading}
+          </span>
+          {toolCall.name && toolCall.context && toolCall.context.trim() !== toolCall.name ? (
+            <span className="shrink-0 text-[10.5px]" style={{ color: "var(--cx-text-mute)" }}>
+              {toolCall.name}
+            </span>
+          ) : null}
+          {typeof toolCall.durationS === "number" ? (
+            <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: "var(--cx-text-dim)" }}>
+              {toolCall.durationS.toFixed(1)}s
+            </span>
+          ) : null}
+        </div>
+        {argsSummary ? (
+          <div className="mt-0.5 truncate text-[10.5px]" style={{ color: "var(--cx-text-mute)" }}>
+            参数 · {argsSummary}
+          </div>
+        ) : null}
+        {hasDetail ? (
+          <details className="mt-1">
+            <summary
+              className="cursor-pointer text-[10.5px]"
+              style={{ color: "var(--cx-text-mute)" }}
+            >
+              {toolCall.result ? "查看结果" : "查看参数"}
+            </summary>
+            <pre
+              className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border p-1.5 text-[10.5px] leading-snug"
+              style={{ background: "var(--cx-bg-soft)", borderColor: "var(--cx-border-soft)", color: "var(--cx-text-soft)" }}
+            >
+{toolCall.result}
+            </pre>
+          </details>
+        ) : null}
+      </div>
+    </div>
   );
 };
 
@@ -88,9 +139,12 @@ export const HermesMessageView: React.FC<HermesMessageProps> = ({
           }}
         >
           {message.toolCalls?.length ? (
-            <div className="mb-2 flex flex-wrap gap-1.5">
+            <div
+              className="mb-2 flex flex-col gap-1 rounded-md border p-2"
+              style={{ background: "var(--cx-bg-soft)", borderColor: "var(--cx-border-soft)" }}
+            >
               {message.toolCalls.map((toolCall) => (
-                <ToolState key={toolCall.id} toolCall={toolCall} />
+                <ToolStep key={toolCall.id} toolCall={toolCall} />
               ))}
             </div>
           ) : null}
@@ -111,15 +165,19 @@ export const HermesMessageView: React.FC<HermesMessageProps> = ({
             </div>
           ) : null}
 
-          {message.reasoning ? (
+          {hasMeaningfulReasoning(message.reasoning) ? (
             <details className="mt-2 border-t pt-2" style={{ borderColor: "var(--cx-border-soft)" }}>
               <summary className="cursor-pointer text-[11px]" style={{ color: "var(--cx-text-mute)" }}>
                 查看推理过程
               </summary>
               <div className="mt-2 whitespace-pre-wrap text-[11.5px] leading-relaxed" style={{ color: "var(--cx-text-soft)" }}>
-                {message.reasoning}
+                {cleanThinkingText(message.reasoning || "")}
               </div>
             </details>
+          ) : message.status === "done" && typeof message.reasoningTokens === "number" && message.reasoningTokens > 0 ? (
+            <div className="mt-2 border-t pt-2 text-[10.5px]" style={{ borderColor: "var(--cx-border-soft)", color: "var(--cx-text-mute)" }}>
+              模型内部推理了 {message.reasoningTokens} 个 token，上游未透传
+            </div>
           ) : null}
 
           {message.status === "error" ? (

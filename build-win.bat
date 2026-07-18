@@ -1,15 +1,9 @@
 @echo off
+setlocal
 
-REM 构建Windows版本
-cd web
-npm run tauri:build
+REM Release build: tests -> package -> artifacts\release\<version>
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0src-tauri\build-all.ps1"
+if errorlevel 1 exit /b %errorlevel%
 
-REM 复制构建产物到win目录
-mkdir ..\win\bin 2>nul
-xcopy /E /Y ..\src-tauri\target\release ..\win\bin\
-
-REM 复制启动脚本
-copy ..\start.bat ..\win\
-
-echo Windows构建完成，产物已保存到 win 目录
-pause
+echo Windows release completed. See artifacts\release.
+endlocal

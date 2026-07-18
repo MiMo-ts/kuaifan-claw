@@ -51,7 +51,7 @@ async function copyServicesToRelativePath() {
   const srcDir = path.join(outputDir);
   const dstDir = path.join(outputDir, "services");
   await mkdir(dstDir, { recursive: true });
-  for (const name of ["moduleSessionProtocol", "gatewayClient", "hermesAttachments", "hermesProtocol"]) {
+  for (const name of ["moduleSessionProtocol", "gatewayClient", "hermesApi", "hermesAttachments", "hermesProtocol"]) {
     const src = path.join(srcDir, `${name}.mjs`);
     const dst = path.join(dstDir, `${name}.mjs`);
     try {
@@ -66,6 +66,7 @@ async function copyServicesToRelativePath() {
 await mkdir(path.join(outputDir, "stores"), { recursive: true });
 await Promise.all([
   buildFixture("gatewayClient"),
+  buildFixture("hermesApi"),
   buildFixture("hermesAttachments"),
   buildFixture("hermesProtocol"),
   buildFixture("moduleSessionProtocol"),

@@ -15,10 +15,12 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 /// 内置 zip 在打包资源中的相对路径前缀（与 `tauri.conf.json` 的 resources 一致）
 pub const BUNDLED_SUBDIR: &str = "bundled-env";
-/// 内置 openclaw-cn 包 zip 的资源子目录
+/// 内置 OpenClaw 包的资源子目录
 pub const BUNDLED_OPENCLAW_SUBDIR: &str = "bundled-openclaw";
-/// 内置 openclaw-cn 包 zip 文件名（由构建脚本在 build 时产出）
-pub const BUNDLED_OPENCLAW_TARBALL: &str = "openclaw-cn.zip";
+/// 内置 OpenClaw npm tarball 文件名
+pub const BUNDLED_OPENCLAW_TARBALL: &str = "openclaw.tgz";
+/// OpenClaw runtime directory beneath the application data directory.
+pub const OPENCLAW_DATA_DIR_NAME: &str = "openclaw";
 /// 内置 chrome-extension tgz 的资源子目录（与 tauri.conf.json resources 一致）
 pub const BUNDLED_CHROME_EXTENSION_SUBDIR: &str = "plugins";
 /// 内置 chrome-extension tgz 文件名
@@ -78,12 +80,12 @@ pub fn resolve_bundled_zip(app: &AppHandle, filename: &str) -> Option<PathBuf> {
     None
 }
 
-/// 解析内置 openclaw-cn npm tarball（tgz）的路径，优先级：
-/// 1. 项目源码 `bundled-openclaw/openclaw-cn.tgz`（开发者调试 / 手动放置）
-/// 2. exe 同级 `bundled-openclaw/openclaw-cn.tgz`
-/// 3. Resource 协议 `bundled-openclaw/openclaw-cn.tgz`
+/// 解析内置 OpenClaw npm tarball（tgz）的路径，优先级：
+/// 1. 项目源码 `bundled-openclaw/openclaw.tgz`（开发者调试 / 手动放置）
+/// 2. exe 同级 `bundled-openclaw/openclaw.tgz`
+/// 3. Resource 协议 `bundled-openclaw/openclaw.tgz`
 ///
-/// 若存在，说明安装包已内置预下载的 openclaw-cn 包，可跳过 registry 网络拉包。
+/// 若存在，说明安装包已内置预下载的 OpenClaw 包，可跳过 registry 网络拉包。
 pub fn resolve_bundled_openclaw_tarball(app: &AppHandle) -> Option<PathBuf> {
     let filename = BUNDLED_OPENCLAW_TARBALL;
 
@@ -93,7 +95,7 @@ pub fn resolve_bundled_openclaw_tarball(app: &AppHandle) -> Option<PathBuf> {
         .join(filename);
     if dev_path.is_file() {
         tracing::info!(
-            "内置 openclaw-cn tarball（项目目录）: {}",
+            "内置 OpenClaw tarball（项目目录）: {}",
             dev_path.display()
         );
         return Some(dev_path);
@@ -110,7 +112,7 @@ pub fn resolve_bundled_openclaw_tarball(app: &AppHandle) -> Option<PathBuf> {
             ];
             for p in &candidates {
                 if p.is_file() {
-                    tracing::info!("内置 openclaw-cn tarball（exe 同级）: {}", p.display());
+                    tracing::info!("内置 OpenClaw tarball（exe 同级）: {}", p.display());
                     return Some(p.clone());
                 }
             }
@@ -121,7 +123,7 @@ pub fn resolve_bundled_openclaw_tarball(app: &AppHandle) -> Option<PathBuf> {
     let rel = format!("{}/{}", BUNDLED_OPENCLAW_SUBDIR, filename);
     if let Ok(p) = app.path().resolve(&rel, BaseDirectory::Resource) {
         if p.is_file() {
-            tracing::info!("内置 openclaw-cn tarball（Resource）: {}", p.display());
+            tracing::info!("内置 OpenClaw tarball（Resource）: {}", p.display());
             return Some(p);
         }
     }

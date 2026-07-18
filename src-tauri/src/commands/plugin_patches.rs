@@ -32,6 +32,26 @@ pub fn apply_plugin_patches(data_dir: &str, resources_dir: Option<&Path>) -> Vec
     out
 }
 
+/// Apply only the WeChat repairs required before an OpenClaw gateway starts.
+/// This avoids dependency installation or unrelated plugin rewrites on the
+/// gateway startup path.
+pub fn repair_wechat_runtime_state(data_dir: &str) -> Vec<String> {
+    let data_dir = Path::new(data_dir);
+    let mut out = Vec::new();
+    ensure_wechat_account_index(data_dir, &mut out);
+    ensure_wechat_bearer_token(data_dir, &mut out);
+
+    for plugin_id in ["wechat_clawbot", "openclaw-weixin"] {
+        let plugin_root = data_dir.join("plugins").join(plugin_id);
+        patch_wechat_command_auth_imports(&plugin_root, &mut out);
+        let dist = plugin_root.join("dist");
+        if dist.is_dir() {
+            patch_wechat_content_length(&dist, &mut out);
+        }
+    }
+    out
+}
+
 /// Run npm install in plugin directories that have a package.json but no
 /// node_modules (e.g. freshly extracted tgz without dependencies).
 fn ensure_plugin_deps(plugins_root: &Path, out: &mut Vec<String>) {
@@ -86,7 +106,7 @@ fn ensure_plugin_deps(plugins_root: &Path, out: &mut Vec<String>) {
 /// Node `JSON.parse` rejects BOMs silently inside the plugin, which makes
 /// `loadWeixinAccount()` return null and the gateway skips channel startup.
 fn ensure_wechat_account_index(data_dir: &Path, out: &mut Vec<String>) {
-    let weixin_dir = data_dir.join("openclaw-cn").join("openclaw-weixin");
+    let weixin_dir = data_dir.join("openclaw").join("openclaw-weixin");
     if !weixin_dir.is_dir() {
         return;
     }
@@ -190,7 +210,7 @@ fn strip_utf8_bom(path: &Path) -> std::io::Result<()> {
 /// This pass detects such half-tokens (no `:` present) and rewrites them as the full
 /// `userId:bot_token` string using the sibling `userId` field. Idempotent.
 fn ensure_wechat_bearer_token(data_dir: &Path, out: &mut Vec<String>) {
-    let accounts_dir = data_dir.join("openclaw-cn").join("openclaw-weixin").join("accounts");
+    let accounts_dir = data_dir.join("openclaw").join("openclaw-weixin").join("accounts");
     if !accounts_dir.is_dir() {
         return;
     }
@@ -425,6 +445,201 @@ fn apply_wechat_patches(root: &Path, resources_dir: Option<&Path>, out: &mut Vec
         }
         patch_wechat_compat_js(&dist, out);
         patch_wechat_index_js(&dist, out);
+        patch_wechat_content_length(&dist, out);
+        patch_wechat_command_auth_imports(&root.join(sub), out);
+    }
+}
+
+fn patch_wechat_command_auth_imports(plugin_root: &Path, out: &mut Vec<String>) -> bool {
+    let candidates = [
+        plugin_root
+            .join("dist")
+            .join("src")
+            .join("messaging")
+            .join("process-message.js"),
+        plugin_root
+            .join("src")
+            .join("messaging")
+            .join("process-message.ts"),
+    ];
+    let mut changed_any = false;
+    for path in candidates {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+        let Some(patched) = rewrite_wechat_command_auth_import(&text) else {
+            continue;
+        };
+        match fs::write(&path, patched) {
+            Ok(()) => {
+                changed_any = true;
+                out.push(format!("[wechat-command-auth] patched {}", path.display()));
+            }
+            Err(error) => out.push(format!(
+                "[wechat-command-auth] write failed {}: {}",
+                path.display(),
+                error
+            )),
+        }
+    }
+    let scoped_imports = [
+        (
+            plugin_root
+                .join("dist")
+                .join("src")
+                .join("messaging")
+                .join("send.js"),
+            "stripMarkdown",
+            "text-runtime",
+        ),
+        (
+            plugin_root
+                .join("src")
+                .join("messaging")
+                .join("send.ts"),
+            "stripMarkdown",
+            "text-runtime",
+        ),
+        (
+            plugin_root
+                .join("dist")
+                .join("src")
+                .join("auth")
+                .join("pairing.js"),
+            "withFileLock",
+            "file-lock",
+        ),
+        (
+            plugin_root
+                .join("src")
+                .join("auth")
+                .join("pairing.ts"),
+            "withFileLock",
+            "file-lock",
+        ),
+    ];
+    for (path, symbol, subpath) in scoped_imports {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+        let Some(patched) = rewrite_single_wechat_sdk_import(&text, symbol, subpath) else {
+            continue;
+        };
+        match fs::write(&path, patched) {
+            Ok(()) => {
+                changed_any = true;
+                out.push(format!("[wechat-sdk-subpath] patched {}", path.display()));
+            }
+            Err(error) => out.push(format!(
+                "[wechat-sdk-subpath] write failed {}: {}",
+                path.display(),
+                error
+            )),
+        }
+    }
+    changed_any
+}
+
+fn rewrite_single_wechat_sdk_import(text: &str, symbol: &str, subpath: &str) -> Option<String> {
+    for quote in ['\"', '\''] {
+        let old = format!(
+            "import {{ {symbol} }} from {quote}openclaw/plugin-sdk{quote};"
+        );
+        let new = format!(
+            "import {{ {symbol} }} from {quote}openclaw/plugin-sdk/{subpath}{quote};"
+        );
+        if text.contains(&new) {
+            return None;
+        }
+        if text.contains(&old) {
+            return Some(text.replacen(&old, &new, 1));
+        }
+    }
+    None
+}
+
+fn rewrite_wechat_command_auth_import(text: &str) -> Option<String> {
+    const COMMAND_AUTH_SYMBOLS: [&str; 2] = [
+        "resolveSenderCommandAuthorizationWithRuntime",
+        "resolveDirectDmAuthorizationOutcome",
+    ];
+    if text.contains("openclaw/plugin-sdk/command-auth") {
+        return None;
+    }
+
+    for quote in ['\"', '\''] {
+        let suffix = format!("from {quote}openclaw/plugin-sdk{quote};");
+        let Some(from_start) = text.find(&suffix) else {
+            continue;
+        };
+        let import_start = text[..from_start].rfind("import {")?;
+        let import_end = from_start + suffix.len();
+        let import_block = &text[import_start..import_end];
+        if !COMMAND_AUTH_SYMBOLS
+            .iter()
+            .all(|symbol| import_block.contains(symbol))
+        {
+            continue;
+        }
+
+        let open_brace = import_block.find('{')?;
+        let close_brace = import_block.rfind('}')?;
+        let retained = import_block[open_brace + 1..close_brace]
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .filter(|name| !COMMAND_AUTH_SYMBOLS.contains(name))
+            .collect::<Vec<_>>();
+        let root_import = format!(
+            "import {{ {}, }} from {quote}openclaw/plugin-sdk{quote};",
+            retained.join(", ")
+        );
+        let command_auth_import = format!(
+            "import {{ {}, }} from {quote}openclaw/plugin-sdk/command-auth{quote};",
+            COMMAND_AUTH_SYMBOLS.join(", ")
+        );
+        let mut patched = text.to_string();
+        patched.replace_range(
+            import_start..import_end,
+            &format!("{root_import}\n{command_auth_import}"),
+        );
+        return Some(patched);
+    }
+    None
+}
+
+/// Node's Undici rejects a user-supplied Content-Length header after OpenClaw
+/// wraps fetch. Let fetch calculate it from the request body instead.
+fn patch_wechat_content_length(dist: &Path, out: &mut Vec<String>) -> bool {
+    let path = dist.join("src").join("api").join("api.js");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(_) => return false,
+    };
+    let mut changed = false;
+    let patched = text
+        .lines()
+        .filter(|line| {
+            let remove = line.contains("Content-Length") && line.contains("byteLength(opts.body");
+            changed |= remove;
+            !remove
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !changed {
+        return false;
+    }
+    match fs::write(&path, format!("{}\n", patched)) {
+        Ok(_) => {
+            out.push(format!("  [ok] removed manual Content-Length from {}", path.display()));
+            true
+        }
+        Err(error) => {
+            out.push(format!("  [err] write {}: {}", path.display(), error));
+            false
+        }
     }
 }
 
@@ -748,6 +963,109 @@ mod tests {
         assert!(!second);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_wechat_account_index_uses_the_active_openclaw_state_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let account_dir = temp
+            .path()
+            .join("openclaw")
+            .join("openclaw-weixin")
+            .join("accounts");
+        fs::create_dir_all(&account_dir).unwrap();
+        fs::write(account_dir.join("default.json"), r#"{"token":"valid-token"}"#).unwrap();
+
+        let mut output = Vec::new();
+        ensure_wechat_account_index(temp.path(), &mut output);
+
+        let index_path = temp
+            .path()
+            .join("openclaw")
+            .join("openclaw-weixin")
+            .join("accounts.json");
+        let ids: Vec<String> = serde_json::from_str(&fs::read_to_string(index_path).unwrap()).unwrap();
+        assert_eq!(ids, vec!["default"]);
+    }
+
+    #[test]
+    fn patch_wechat_content_length_removes_the_manually_set_header() {
+        let temp = tempfile::tempdir().unwrap();
+        let api_dir = temp.path().join("dist").join("src").join("api");
+        fs::create_dir_all(&api_dir).unwrap();
+        let api_path = api_dir.join("api.js");
+        fs::write(
+            &api_path,
+            "const headers = {\n  \"Content-Type\": \"application/json\",\n  AuthorizationType: \"ilink_bot_token\",\n  \"Content-Length\": String(Buffer.byteLength(opts.body, \"utf-8\")),\n};\n",
+        )
+        .unwrap();
+
+        assert!(patch_wechat_content_length(&temp.path().join("dist"), &mut Vec::new()));
+        let patched = fs::read_to_string(api_path).unwrap();
+        assert!(!patched.contains("Content-Length"));
+    }
+
+    #[test]
+    fn repair_wechat_runtime_moves_command_auth_imports_to_the_supported_subpath() {
+        let temp = tempfile::tempdir().unwrap();
+        let messaging_dir = temp
+            .path()
+            .join("plugins")
+            .join("wechat_clawbot")
+            .join("dist")
+            .join("src")
+            .join("messaging");
+        fs::create_dir_all(&messaging_dir).unwrap();
+        let process_message = messaging_dir.join("process-message.js");
+        fs::write(
+            &process_message,
+            "import { createTypingCallbacks, resolveSenderCommandAuthorizationWithRuntime, resolveDirectDmAuthorizationOutcome, resolvePreferredOpenClawTmpDir, } from \"openclaw/plugin-sdk\";\n",
+        )
+        .unwrap();
+        let send_message = messaging_dir.join("send.js");
+        fs::write(
+            &send_message,
+            "import { stripMarkdown } from \"openclaw/plugin-sdk\";\n",
+        )
+        .unwrap();
+        let auth_dir = temp
+            .path()
+            .join("plugins")
+            .join("wechat_clawbot")
+            .join("dist")
+            .join("src")
+            .join("auth");
+        fs::create_dir_all(&auth_dir).unwrap();
+        let pairing = auth_dir.join("pairing.js");
+        fs::write(
+            &pairing,
+            "import { withFileLock } from \"openclaw/plugin-sdk\";\n",
+        )
+        .unwrap();
+
+        repair_wechat_runtime_state(temp.path().to_str().unwrap());
+
+        let patched = fs::read_to_string(&process_message).unwrap();
+        assert!(patched.contains(
+            "from \"openclaw/plugin-sdk/command-auth\""
+        ));
+        assert!(patched.contains("createTypingCallbacks"));
+        assert!(patched.contains("resolvePreferredOpenClawTmpDir"));
+        assert!(!patched.contains(
+            "createTypingCallbacks, resolveSenderCommandAuthorizationWithRuntime"
+        ));
+        assert!(fs::read_to_string(&send_message)
+            .unwrap()
+            .contains("from \"openclaw/plugin-sdk/text-runtime\""));
+        assert!(fs::read_to_string(&pairing)
+            .unwrap()
+            .contains("from \"openclaw/plugin-sdk/file-lock\""));
+
+        let second = repair_wechat_runtime_state(temp.path().to_str().unwrap());
+        assert_eq!(fs::read_to_string(&process_message).unwrap(), patched);
+        assert!(!second
+            .iter()
+            .any(|line| line.contains("[wechat-command-auth] patched")));
     }
 }
 

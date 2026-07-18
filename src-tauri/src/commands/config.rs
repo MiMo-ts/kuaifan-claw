@@ -21,7 +21,7 @@ pub fn parse_openclaw_config(data_dir: &str) -> (String, String, String, bool, b
     let config_path = format!("{}/config/app.yaml", data_dir);
     let content = std::fs::read_to_string(&config_path).unwrap_or_default();
 
-    let mut package = "openclaw-cn".to_string();
+    let mut package = "openclaw".to_string();
     let mut version_tag = "latest".to_string();
     let mut registry = "https://registry.npmmirror.com".to_string(); // 默认使用国内镜像
     let mut allow_scripts = true;

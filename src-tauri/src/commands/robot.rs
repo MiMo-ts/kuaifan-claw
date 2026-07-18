@@ -2003,7 +2003,7 @@ pub async fn download_skills(
         .await
         .map_err(|e| format!("创建目录失败: {}", e))?;
 
-    let openclaw_dir = PathBuf::from(&data_base).join("openclaw-cn");
+    let openclaw_dir = PathBuf::from(&data_base).join(crate::bundled_env::OPENCLAW_DATA_DIR_NAME);
 
     let skills_branch =
         std::env::var("OPENCLAW_SKILLS_BRANCH").unwrap_or_else(|_| "main".to_string());

@@ -44,6 +44,11 @@ interface PendingReq {
 
 const DEVICE_STORAGE_KEY = 'clawdbot-gateway-device-id-v2';
 
+// Session browsing and chat only need regular operator read/write access.
+// Requesting admin, approvals, or pairing scopes turns a reconnect into a
+// device-permission upgrade, which OpenClaw correctly blocks until approved.
+export const MANAGER_OPERATOR_SCOPES = ['operator.read', 'operator.write'] as const;
+
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   let binary = '';
   const bytes = new Uint8Array(buf);
@@ -144,7 +149,7 @@ export class GatewayClient {
       const dataDir: string = await invoke('get_data_dir');
       const { readTextFile } = await import('@tauri-apps/plugin-fs');
       const { join } = await import('@tauri-apps/api/path');
-      const cfgPath = await join(dataDir, 'openclaw-cn', 'openclaw.json');
+      const cfgPath = await join(dataDir, 'openclaw', 'openclaw.json');
       const content = await readTextFile(cfgPath);
       const cfg = JSON.parse(content);
       gw.port = cfg?.gateway?.port ?? 18789;
@@ -232,10 +237,10 @@ export class GatewayClient {
 
   private async _sendConnect() {
     const id = String(this.nextId++);
-    const clientId = 'kuaifan-claw-manager';
+    const clientId = 'openclaw-control-ui';
     const clientMode = 'webchat';
     const role = 'operator';
-    const scopes = ['operator.admin', 'operator.approvals', 'operator.pairing'];
+    const scopes = [...MANAGER_OPERATOR_SCOPES];
 
     let device: any = undefined;
     if (typeof crypto !== 'undefined' && crypto.subtle) {
@@ -261,9 +266,9 @@ export class GatewayClient {
     const body = {
       type: 'req', id, method: 'connect',
       params: {
-        minProtocol: 3, maxProtocol: 3,
+        minProtocol: 4, maxProtocol: 4,
         client: {
-          id: clientId, version: '1.0.0',
+          id: clientId, version: 'control-ui',
           platform: navigator.platform?.startsWith('Win') ? 'win32' :
                     navigator.platform?.startsWith('Mac') ? 'darwin' : 'linux',
           mode: clientMode,

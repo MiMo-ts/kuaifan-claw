@@ -1,7 +1,7 @@
-// 数据结构模块
+﻿// 鏁版嵁缁撴瀯妯″潡
 use serde::{Deserialize, Serialize};
 
-// 环境检测状态
+// 鐜妫€娴嬬姸鎬?
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum EnvStatus {
@@ -11,7 +11,7 @@ pub enum EnvStatus {
     Checking,
 }
 
-// 环境检测项
+// 鐜妫€娴嬮」
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvItem {
     pub name: String,
@@ -21,7 +21,7 @@ pub struct EnvItem {
     pub required: bool,
 }
 
-// 环境检测结果
+// 鐜妫€娴嬬粨鏋?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvCheckResult {
     pub success: bool,
@@ -29,14 +29,14 @@ pub struct EnvCheckResult {
     pub recommendations: Vec<String>,
 }
 
-// 一键修复环境（安装脚本执行记录）
+// 涓€閿慨澶嶇幆澧冿紙瀹夎鑴氭湰鎵ц璁板綍锛?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvAutoFixResult {
     pub ok: bool,
     pub messages: Vec<String>,
 }
 
-// 安装进度
+// 瀹夎杩涘害
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallProgress {
     pub step: String,
@@ -45,21 +45,21 @@ pub struct InstallProgress {
     pub status: String,
 }
 
-/// 向导「安装 OpenClaw-CN」步骤：用于检测是否可跳过整步安装。
+/// 鍚戝銆屽畨瑁?OpenClaw銆嶆楠わ細鐢ㄤ簬妫€娴嬫槸鍚﹀彲璺宠繃鏁存瀹夎銆?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenClawCnStatus {
-    /// 存在 `dist/entry.js`（网关/CLI 入口）
+    /// 瀛樺湪 `dist/entry.js`锛堢綉鍏?CLI 鍏ュ彛锛?
     pub core_ready: bool,
-    /// `node_modules` 已含核心依赖（可启动网关）
+    /// `node_modules` 宸插惈鏍稿績渚濊禆锛堝彲鍚姩缃戝叧锛?
     pub deps_ready: bool,
-    /// 核心 + 依赖均就绪，向导可直接「下一步」
+    /// 鏍稿績 + 渚濊禆鍧囧氨缁紝鍚戝鍙洿鎺ャ€屼笅涓€姝ャ€?
     pub fully_ready: bool,
     pub version: Option<String>,
     pub openclaw_dir: String,
 }
 
-// 插件信息
+// 鎻掍欢淇℃伅
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
     pub id: String,
@@ -69,11 +69,11 @@ pub struct PluginInfo {
     pub installed: bool,
     pub version: Option<String>,
     pub enabled: bool,
-    /// 运行时 npm 依赖是否就绪（channel_plugin_runtime_ready），就绪时网关才能正常加载
+    /// 杩愯鏃?npm 渚濊禆鏄惁灏辩华锛坈hannel_plugin_runtime_ready锛夛紝灏辩华鏃剁綉鍏虫墠鑳芥甯稿姞杞?
     pub deps_ready: bool,
 }
 
-// 模型供应商
+// 妯″瀷渚涘簲鍟?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelProvider {
     pub id: String,
@@ -84,7 +84,7 @@ pub struct ModelProvider {
     pub total_models_count: usize,
 }
 
-// 模型配置
+// 妯″瀷閰嶇疆
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub provider: String,
@@ -95,7 +95,7 @@ pub struct ModelConfig {
     pub max_tokens: usize,
 }
 
-// 机器人模板
+// 鏈哄櫒浜烘ā鏉?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RobotTemplate {
     pub id: String,
@@ -111,19 +111,19 @@ pub struct RobotTemplate {
     pub tags: Vec<String>,
 }
 
-/// 向导展示的 MCP 推荐项（需在 OpenClaw 侧自行接入，管理器不自动安装 MCP 进程）
+/// 鍚戝灞曠ず鐨?MCP 鎺ㄨ崘椤癸紙闇€鍦?OpenClaw 渚ц嚜琛屾帴鍏ワ紝绠＄悊鍣ㄤ笉鑷姩瀹夎 MCP 杩涚▼锛?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpRecommendation {
     pub id: String,
     pub name: String,
     pub description: String,
     pub setup_note: String,
-    /// 常见 MCP 实现可能依赖云端嵌入/搜索等 API Key（仅提示用）
+    /// 甯歌 MCP 瀹炵幇鍙兘渚濊禆浜戠宓屽叆/鎼滅储绛?API Key锛堜粎鎻愮ず鐢級
     #[serde(default)]
     pub requires_api_key: bool,
 }
 
-// Skill 信息
+// Skill 淇℃伅
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillInfo {
     pub id: String,
@@ -136,7 +136,7 @@ pub struct SkillInfo {
     pub notice: Option<String>,
 }
 
-// 机器人
+// 鏈哄櫒浜?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Robot {
     pub id: String,
@@ -145,18 +145,20 @@ pub struct Robot {
     pub description: String,
     pub icon: String,
     pub color: String,
-    /// 该机器人模板对应的专属技能 ID 列表（来自 builtin_robot_templates 或用户自定义）
+    /// 璇ユ満鍣ㄤ汉妯℃澘瀵瑰簲鐨勪笓灞炴妧鑳?ID 鍒楄〃锛堟潵鑷?builtin_robot_templates 鎴栫敤鎴疯嚜瀹氫箟锛?
     pub skills: Vec<String>,
     pub created_at: String,
 }
 
-// 实例
+// 瀹炰緥
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub id: String,
+    #[serde(default = "default_instance_module_id")]
+    pub module_id: String,
     pub name: String,
     pub enabled: bool,
-    /// 绑定的机器人 ID，不选机器人时为 None（使用通用人设 + openclaw skills）
+    /// 缁戝畾鐨勬満鍣ㄤ汉 ID锛屼笉閫夋満鍣ㄤ汉鏃朵负 None锛堜娇鐢ㄩ€氱敤浜鸿 + openclaw skills锛?
     #[serde(default)]
     pub robot_id: Option<String>,
     pub channel_type: String,
@@ -169,7 +171,11 @@ pub struct Instance {
     pub updated_at: String,
 }
 
-// 网关状态
+fn default_instance_module_id() -> String {
+    "openclaw".to_string()
+}
+
+// 缃戝叧鐘舵€?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayStatus {
     pub running: bool,
@@ -180,7 +186,7 @@ pub struct GatewayStatus {
     pub instances_running: usize,
 }
 
-// 备份信息
+// 澶囦唤淇℃伅
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupInfo {
     pub id: String,
@@ -190,7 +196,7 @@ pub struct BackupInfo {
     pub description: Option<String>,
 }
 
-// 系统信息
+// 绯荤粺淇℃伅
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub os: String,
@@ -201,7 +207,7 @@ pub struct SystemInfo {
     pub hostname: String,
 }
 
-// 日志条目
+// 鏃ュ織鏉＄洰
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
     pub timestamp: String,
@@ -210,18 +216,18 @@ pub struct LogEntry {
     pub target: Option<String>,
 }
 
-/// 设置页「运行日志」：网关 stdout/stderr 与管理端 app.log 尾部
+/// 璁剧疆椤点€岃繍琛屾棩蹇椼€嶏細缃戝叧 stdout/stderr 涓庣鐞嗙 app.log 灏鹃儴
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLogsTail {
     pub gateway: String,
     pub manager: String,
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 全模型多供应商监控数据结构
-// ═══════════════════════════════════════════════════════════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+// 鍏ㄦā鍨嬪渚涘簲鍟嗙洃鎺ф暟鎹粨鏋?
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
-/// 用量记录扩展（支持详细指标）
+/// 鐢ㄩ噺璁板綍鎵╁睍锛堟敮鎸佽缁嗘寚鏍囷級
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetailedUsageRecord {
     pub ts: String,
@@ -239,7 +245,7 @@ pub struct DetailedUsageRecord {
     pub error_message: Option<String>,
 }
 
-/// 基础用量记录（用于向后兼容）
+/// 鍩虹鐢ㄩ噺璁板綍锛堢敤浜庡悜鍚庡吋瀹癸級
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenUsageRecord {
     pub ts: String,
@@ -268,7 +274,7 @@ impl From<TokenUsageRecord> for DetailedUsageRecord {
     }
 }
 
-/// 模型用量汇总（按模型分组）
+/// 妯″瀷鐢ㄩ噺姹囨€伙紙鎸夋ā鍨嬪垎缁勶級
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelUsageStats {
     pub provider: String,
@@ -283,7 +289,7 @@ pub struct ModelUsageStats {
     pub success_rate: f64,
 }
 
-/// 供应商用量汇总（按供应商分组）
+/// 渚涘簲鍟嗙敤閲忔眹鎬伙紙鎸変緵搴斿晢鍒嗙粍锛?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderUsageStats {
     pub provider: String,
@@ -294,7 +300,7 @@ pub struct ProviderUsageStats {
     pub top_model: Option<String>,
 }
 
-/// 供应商定价信息
+/// 渚涘簲鍟嗗畾浠蜂俊鎭?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderPricing {
     pub provider: String,
@@ -322,7 +328,7 @@ impl ProviderPricing {
     }
 }
 
-/// 成本预算配置
+/// 鎴愭湰棰勭畻閰嶇疆
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostBudget {
     pub id: String,
@@ -348,7 +354,7 @@ pub enum BudgetType {
     Total,
 }
 
-/// 成本告警记录
+/// 鎴愭湰鍛婅璁板綍
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostAlert {
     pub id: String,
@@ -370,7 +376,7 @@ pub enum AlertType {
     Threshold100,
 }
 
-/// 实时监控指标
+/// 瀹炴椂鐩戞帶鎸囨爣
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RealTimeMetrics {
     pub timestamp: String,

@@ -1,6 +1,9 @@
 import {
+  cleanThinkingText,
   normalizeCreatedSession,
+  normalizePersistedToolHistoryMessage,
   normalizeRuntimeProvider,
+  normalizeReasoningEffort,
   terminalEventStatus,
   type HermesSessionIdentity,
 } from "./hermesProtocol";
@@ -23,6 +26,22 @@ import {
 } from "./hermesAttachments";
 
 const RPC_TIMEOUT_MS = 30_000;
+
+function isSessionNotFoundError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof HermesApiError) {
+    if (error.code === 4007 || error.code === 4001) return true;
+    if (typeof error.message === "string" && /session not found/i.test(error.message)) {
+      return true;
+    }
+    return false;
+  }
+  if (error instanceof Error) {
+    return /session not found/i.test(error.message);
+  }
+  return false;
+}
+
 
 const HERMES_DASHBOARD_SESSION_TOKEN = "kfc-desk-3463b6e3f34d0f12fc416939e9a81fc395f40f4730cfc145";
 
@@ -106,7 +125,6 @@ export class HermesApiClient {
     try {
       const response = await fetch(`${this.baseUrl}/api/status`, {
         cache: "no-store",
-        credentials: "include",
       });
       return response.ok;
     } catch {
@@ -131,6 +149,7 @@ export class HermesApiClient {
     const result = await this.request("session.create", {
       source: "desktop",
       close_on_disconnect: false,
+      persist: true,
     });
     const identity = normalizeCreatedSession(result);
     this.rememberIdentity(identity);
@@ -139,6 +158,18 @@ export class HermesApiClient {
       session_id: identity.storedSessionId,
       started_at: Date.now(),
       last_active: Date.now(),
+    });
+  }
+
+  async setReasoningEffort(
+    runtimeSessionId: string,
+    effort: "off" | "low" | "medium" | "high" | "xhigh",
+  ): Promise<void> {
+    const value = effort === "off" ? "" : effort;
+    await this.request("config.set", {
+      key: "reasoning",
+      session_id: runtimeSessionId,
+      value,
     });
   }
 
@@ -343,14 +374,36 @@ export class HermesApiClient {
       return { storedSessionId, runtimeSessionId: existing };
     }
 
-    const resumed = await this.request("session.resume", {
-      session_id: storedSessionId,
-      source: "desktop",
-      close_on_disconnect: false,
-    });
-    const identity = normalizeCreatedSession(resumed, storedSessionId);
-    this.rememberIdentity(identity);
-    return identity;
+    try {
+      const resumed = await this.request("session.resume", {
+        session_id: storedSessionId,
+        source: "desktop",
+        close_on_disconnect: false,
+      });
+      const identity = normalizeCreatedSession(resumed, storedSessionId);
+      this.rememberIdentity(identity);
+      return identity;
+    } catch (error) {
+      // The stored_session_id has no DB row yet (e.g. an un-persisted draft
+      // from before the persist=true change, or a session.create that was
+      // rolled back). Resume returns 4007 / "session not found" in that case.
+      // The draft has no real content, so recreate the in-memory session and
+      // let prompt.submit take it from there. We deliberately do NOT touch
+      // _sessions on the gateway for an existing DB row that resume could
+      // resume -- this fallback only fires for the truly-empty case.
+      if (!isSessionNotFoundError(error)) throw error;
+      const recreated = await this.request("session.create", {
+        source: "desktop",
+        close_on_disconnect: false,
+        persist: true,
+      });
+      const identity = normalizeCreatedSession(recreated);
+      // The new session has its own freshly-minted stored_session_id; map the
+      // caller's id onto the runtime id so the rest of the request flow stays
+      // consistent. The caller's id is the orphan draft we are replacing.
+      this.rememberIdentity(identity);
+      return identity;
+    }
   }
 
   private async ensureChatSession(payload: HermesStartChatPayload): Promise<HermesSessionIdentity> {
@@ -360,6 +413,7 @@ export class HermesApiClient {
     const created = await this.request("session.create", {
       source: "desktop",
       close_on_disconnect: false,
+      persist: true,
       ...(payload.model ? { model: payload.model } : {}),
       ...(payload.modelProvider ? { provider: payload.modelProvider } : {}),
       ...(payload.workspace ? { cwd: payload.workspace } : {}),
@@ -443,15 +497,44 @@ export class HermesApiClient {
   private async getSessionToken(): Promise<string> {
     if (this.sessionToken !== null) return this.sessionToken;
 
-    // 1. The desktop shell mints `HERMES_DASHBOARD_SESSION_TOKEN` via
-    //    `runtime.json` and passes it to the Hermes process. The Hermes
-    //    dashboard reads it as `_SESSION_TOKEN` and expects every HTTP
-    //    request to carry it as `X-Hermes-Session-Token` (REST) or
-    //    `?token=` (WebSocket). Use the same value here so the embedded
-    //    Tauri WebView can talk to the loopback dashboard without loading
-    //    the dashboard's HTML.
+    // 1. The Hermes dashboard injects `__HERMES_SESSION_TOKEN__` into the
+    //    SPA HTML at mount time. The Electron desktop reads it the same
+    //    way (electron/dashboard-token.cjs#adoptServedDashboardToken).
+    //    We do the same: GET the index, parse the injected value, and
+    //    adopt it. This is the only auth the live Hermes process actually
+    //    serves for its own dashboard.
+    const served = await this.fetchServedSessionToken();
+    if (served) {
+      this.sessionToken = served;
+      return this.sessionToken;
+    }
+
+    // 2. Fallback: the Rust launcher mints `HERMES_DASHBOARD_SESSION_TOKEN`
+    //    via runtime.json and passes it to Hermes. The Hermes dashboard
+    //    reads it as `_SESSION_TOKEN` and accepts it on REST (X-Hermes-
+    //    Session-Token) or WS (?token=). Embedded Tauri WebViews that
+    //    never load the dashboard rely on this. It ONLY matches when the
+    //    Python process is actually started with that env var - in
+    //    ad-hoc shells (e.g. Hermes launched directly by the Electron
+    //    desktop) the env is missing and the served HTML is the only
+    //    working path.
     this.sessionToken = HERMES_DASHBOARD_SESSION_TOKEN;
     return this.sessionToken;
+  }
+
+  private async fetchServedSessionToken(): Promise<string | null> {
+    if (!this.baseUrl) return null;
+    try {
+      const response = await fetch(this.baseUrl + "/", { cache: "no-store" });
+      if (!response.ok) return null;
+      const html = await response.text();
+      const match = /window\.__HERMES_SESSION_TOKEN__\s*=\s*("(?:\\.|[^"\\])*")/.exec(html);
+      if (!match) return null;
+      const parsed = JSON.parse(match[1]);
+      return typeof parsed === "string" && parsed ? parsed : null;
+    } catch {
+      return null;
+    }
   }
 
   private async dashboardRequest(path: string, init: RequestInit = {}): Promise<Response> {
@@ -518,7 +601,7 @@ export class HermesApiClient {
       name: String(raw.name || file.name),
       mime: String(raw.mime || file.type || "application/octet-stream"),
       size: Number(raw.size || file.size || 0),
-      kind: classifyAttachment(String(raw.mime || file.type || "")),
+      kind: classifyAttachment(String(raw.mime || file.type || ""), String(raw.name || file.name || "")),
       state: "uploaded",
       url: await this.materializeAttachmentUrl(resolveAttachmentUrl({
         baseUrl: this.baseUrl,
@@ -581,6 +664,12 @@ export class HermesApiClient {
         type: "final",
         text: typeof payload.text === "string" ? payload.text : "",
         status: payload.status,
+        // No first-class `reasoning_tokens` in the gateway's final event
+        // payload today, but include the field so future wire-up is a
+        // one-liner on the Python side.
+        reasoningTokens: typeof payload.reasoning_tokens === "number"
+          ? payload.reasoning_tokens
+          : undefined,
       };
     }
     if (terminalStatus === "error") {
@@ -593,15 +682,25 @@ export class HermesApiClient {
         return { type: "delta", text: String(payload.text || "") };
       case "thinking.delta":
       case "reasoning.delta":
-      case "reasoning.available":
-        return { type: "reasoning", text: String(payload.text || "") };
+      case "reasoning.available": {
+        // The model sometimes prepends boilerplate like "Thinking..." or
+        // "Hermes is thinking..." to its first reasoning chunk. Strip the
+        // status prefix only on the leading chunk (detected by the
+        // lowercase-letter prefix) so we don't lose sentence boundaries
+        // inside the actual reasoning text. Mirrors native Hermes.
+        const raw = String(payload.text || "");
+        return { type: "reasoning", text: raw };
+      }
       case "tool.start":
         return { type: "tool_call", toolCall: this.normalizeToolCall(payload) };
       case "tool.complete":
+      case "tool.failed":
         return {
           type: "tool_result",
           toolCallId: String(payload.tool_id || payload.id || ""),
-          result: resultText(payload.result ?? payload.result_text),
+          result: resultText(payload.result ?? payload.result_text ?? payload.error),
+          status: type === "tool.failed" || payload.error ? "error" : "done",
+          durationS: typeof payload.duration_s === "number" ? payload.duration_s : undefined,
         };
       case "session.info":
       case "session.title":
@@ -610,6 +709,9 @@ export class HermesApiClient {
           type: "meta",
           model: typeof payload.model === "string" ? payload.model : undefined,
           title: typeof payload.title === "string" ? payload.title : undefined,
+          reasoningEffort: typeof payload.reasoning_effort === "string"
+            ? normalizeReasoningEffort(payload.reasoning_effort)
+            : undefined,
         };
       default:
         return null;
@@ -639,15 +741,24 @@ export class HermesApiClient {
     runtimeSessionId: string,
     index: number,
   ): Promise<HermesMessage> {
+    const id = String(message.id || message.message_id || `${sessionId}-${index}`);
+    const timestamp = toTimestamp(message.ts || message.timestamp || message.created_at);
+    if (message.role === "tool") {
+      return normalizePersistedToolHistoryMessage(message, id, timestamp);
+    }
+
     const content = message.content ?? message.text ?? message.message ?? "";
     return {
-      id: String(message.id || message.message_id || `${sessionId}-${index}`),
+      id,
       role: (message.role || "user") as HermesMessage["role"],
       content: resultText(content),
       status: message.status || "done",
-      ts: toTimestamp(message.ts || message.timestamp || message.created_at),
+      ts: timestamp,
       model: typeof message.model === "string" ? message.model : undefined,
       reasoning: typeof message.reasoning === "string" ? message.reasoning : undefined,
+      reasoningTokens: typeof message.reasoning_tokens === "number"
+        ? message.reasoning_tokens
+        : undefined,
       toolCalls: Array.isArray(message.tool_calls)
         ? message.tool_calls.map((tool: any) => this.normalizeToolCall(tool))
         : undefined,
@@ -678,7 +789,7 @@ export class HermesApiClient {
       kind: typeof raw.kind === "string"
         && ["image", "video", "audio", "document", "file"].includes(raw.kind)
         ? raw.kind as HermesAttachment["kind"]
-        : classifyAttachment(mime),
+        : classifyAttachment(mime, typeof raw.name === "string" ? raw.name : ""),
       state: "uploaded",
       url: await this.materializeAttachmentUrl(resolveAttachmentUrl({
         baseUrl: this.baseUrl,
@@ -709,14 +820,29 @@ export class HermesApiClient {
   }
 
   private normalizeToolCall(payload: any): HermesToolCall {
+    // Hermes sends `context` (build_tool_label) on every tool.start. The
+    // kuaifanclaw GUI used to drop it on the floor, which is why each
+    // tool call in the bubble looked like a bare "browser_navigate" chip
+    // instead of a step the user can read ("Opened www.douyin.com").
+    const contextRaw = typeof payload.context === "string"
+      ? payload.context
+      : typeof payload.preview === "string"
+        ? payload.preview
+        : "";
+    const argsTextRaw = typeof payload.args_text === "string"
+      ? payload.args_text
+      : "";
     return {
       id: String(payload.tool_id || payload.id || `tool-${Date.now()}`),
       name: String(payload.name || "tool"),
-      args: payload.args ?? payload.args_text,
+      context: contextRaw || undefined,
+      argsText: argsTextRaw || undefined,
+      args: payload.args ?? (argsTextRaw ? argsTextRaw : undefined),
       result: resultText(payload.result ?? payload.result_text) || undefined,
       status: payload.error ? "error" : payload.result != null ? "done" : "running",
       startedAt: toTimestamp(payload.started_at || Date.now()),
       finishedAt: payload.result != null ? Date.now() : undefined,
+      durationS: typeof payload.duration_s === "number" ? payload.duration_s : undefined,
     };
   }
 

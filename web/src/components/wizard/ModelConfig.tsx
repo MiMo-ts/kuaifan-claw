@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import toast from "react-hot-toast";
+import type { ModuleId } from "../../modules/registry";
 import {
   CxIconAlertCircle,
   CxIconCheck,
@@ -41,6 +42,7 @@ interface ModelEntry {
 interface Props {
   onNext: () => void;
   onPrev: () => void;
+  moduleId?: ModuleId;
 }
 
 const C = {
@@ -399,12 +401,12 @@ function ModelCard({
     </button>
   );
 }
-export default function ModelConfig({ onNext, onPrev }: Props) {
+export default function ModelConfig({ onNext, onPrev, moduleId = "openclaw" }: Props) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProvider, setSelectedProvider] = useState<string>("kuaifan");
   const [apiKey, setApiKey] = useState("");
-  const [apiFormat, setApiFormat] = useState("chat_completions");
+  const apiFormat = "chat_completions";
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
@@ -448,13 +450,12 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
 
     try {
       const [cfg, defaultModel] = await Promise.all([
-        invoke<{ api_key?: string; api_format?: string; proxy_url?: string; proxy_username?: string; proxy_password?: string }>("get_provider_config", { providerId: selectedProvider }),
+        invoke<{ api_key?: string; proxy_url?: string; proxy_username?: string; proxy_password?: string }>("get_provider_config", { providerId: selectedProvider }),
         invoke<{ provider?: string; model_name?: string }>("get_default_model", {}),
       ]);
       const stored = cfg?.api_key || "";
       setApiKey(stored);
       setHasStoredKey(stored.length > 0);
-      setApiFormat(cfg?.api_format || "chat_completions");
       setProxyUrl(cfg?.proxy_url || "");
       setProxyUsername(cfg?.proxy_username || "");
       setProxyPassword(cfg?.proxy_password || "");
@@ -562,28 +563,11 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
     setTesting(false);
   };
 
-  const handleApiFormatChange = async (fmt: string) => {
-    setApiFormat(fmt);
-    try {
-      await invoke("save_provider_config", {
-        providerId: "kuaifan",
-        apiKey: "",
-        apiFormat: fmt,
-        proxyUrl: null,
-        proxyUsername: null,
-        proxyPassword: null,
-      });
-    } catch (e) {
-      toast.error("保存请求格式失败: " + String(e));
-    }
-  };
-
   const handleSave = async () => {
     try {
       await invoke("save_provider_config", {
         providerId: selectedProvider,
         apiKey,
-        apiFormat: apiFormat || null,
         proxyUrl: proxyUrl || null,
         proxyUsername: proxyUsername || null,
         proxyPassword: proxyPassword || null,
@@ -597,6 +581,7 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
           modelName: defaultModelName,
         });
       }
+      await invoke("sync_active_module_configuration", { moduleId });
 
       toast.success(
         defaultModelName
@@ -788,8 +773,6 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
                   <div className="flex gap-2 flex-wrap">
                     {[
                       { value: "chat_completions", label: "Chat Completions", desc: "/v1/chat/completions" },
-                      { value: "responses", label: "Responses", desc: "/v1/responses" },
-                      { value: "messages", label: "Messages", desc: "/v1/messages" },
                     ].map((opt) => (
                       <label
                         key={opt.value}
@@ -804,7 +787,7 @@ export default function ModelConfig({ onNext, onPrev }: Props) {
                           name="apiFormat"
                           value={opt.value}
                           checked={apiFormat === opt.value}
-                          onChange={() => handleApiFormatChange(opt.value)}
+                          readOnly
                           className="sr-only"
                         />
                         <div
