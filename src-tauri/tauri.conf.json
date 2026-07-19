@@ -50,6 +50,7 @@
       "bundled-env/*",
       "bundled-openclaw/openclaw.tgz",
       "bundled-hermes/*",
+      "resources/bundled-skills",
       "resources/data",
       "resources/skills-env",
       "resources/plugins",

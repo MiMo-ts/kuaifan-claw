@@ -2135,6 +2135,7 @@ fn prune_stale_manager_channel_account_keys(
 pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), String> {
     crate::commands::instance::migrate_legacy_instances_to_modules(data_dir).await?;
     crate::commands::model::ensure_models_yaml_api_keys_are_plaintext(data_dir).await?;
+    let managed_skill_root = crate::services::bundled_skills::bootstrap_managed_skill(Path::new(data_dir))?;
 
     let openclaw_dir = PathBuf::from(data_dir).join("openclaw");
     tokio::fs::create_dir_all(&openclaw_dir)
@@ -2265,6 +2266,7 @@ pub async fn sync_openclaw_config_from_manager(data_dir: &str) -> Result<(), Str
     // 防止多次创建机器人后 extraDirs 堆积，导致网关加载到其它模板机器人的技能
         ensure_control_ui_allowed_origins(&mut base, port, &bind);
 prune_stale_skills_extra_dirs(&mut base, data_dir);
+    crate::services::bundled_skills::register_openclaw_skill_root(&mut base, &managed_skill_root);
 
     // 确保 plugins.load.paths 包含 node_modules 路径（插件安装在此处）
     let node_modules = PathBuf::from(data_dir).join("openclaw").join("node_modules");

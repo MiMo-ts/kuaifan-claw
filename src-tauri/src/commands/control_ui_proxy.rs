@@ -20,6 +20,8 @@ use std::time::Duration;
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+const CONTROL_UI_ENHANCER_PATH: &str = "/__kuaifan__/control-ui-enhancer.js";
+const CONTROL_UI_ENHANCER: &str = include_str!("../../resources/control-ui-enhancer.js");
 /// 普通 HTTP 代理的读超时：30s 够用。
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// WebSocket 长连接读超时：模型「思考」常见 >30s，故用 1h 兜底，正常空闲时 TCP keepalive 会清理死链。
@@ -35,6 +37,17 @@ struct ProxyHandle {
 }
 
 static PROXY: OnceLock<Mutex<Option<ProxyHandle>>> = OnceLock::new();
+
+#[cfg(test)]
+static PROXY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(test)]
+fn lock_proxy_test() -> std::sync::MutexGuard<'static, ()> {
+    PROXY_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("control-ui proxy test lock")
+}
 
 /// 启动代理（同网关端口已在跑则直接返回该端口，避免每次点启动都换端口）。返回代理监听的本地端口。
 pub fn start(data_dir: &str, gateway_port: u16) -> Result<u16, String> {
@@ -259,6 +272,9 @@ fn try_serve_static(method: &str, path: &str, root: &Path) -> Option<Vec<u8>> {
     if path.contains("..") {
         return None;
     }
+    if path == CONTROL_UI_ENHANCER_PATH {
+        return static_response(method, "application/javascript; charset=utf-8", CONTROL_UI_ENHANCER.as_bytes());
+    }
     let p = path.trim_start_matches('/');
     let p = if p.is_empty() { "index.html" } else { p };
     let full = root.join(p);
@@ -266,7 +282,39 @@ fn try_serve_static(method: &str, path: &str, root: &Path) -> Option<Vec<u8>> {
         return None;
     }
     let bytes = std::fs::read(&full).ok()?;
-    let mime = guess_mime(p);
+    let served = if p.eq_ignore_ascii_case("index.html") {
+        std::str::from_utf8(&bytes)
+            .map(inject_control_ui_enhancer)
+            .unwrap_or_else(|_| bytes.clone())
+    } else {
+        bytes
+    };
+    static_response(method, guess_mime(p), &served)
+}
+
+fn inject_control_ui_enhancer(html: &str) -> Vec<u8> {
+    if html.contains(CONTROL_UI_ENHANCER_PATH) {
+        return html.as_bytes().to_vec();
+    }
+    let tag = format!(r#"<script src="{}"></script>"#, CONTROL_UI_ENHANCER_PATH);
+    if let Some(position) = html.rfind("</head>") {
+        let mut output = String::with_capacity(html.len() + tag.len());
+        output.push_str(&html[..position]);
+        output.push_str(&tag);
+        output.push_str(&html[position..]);
+        return output.into_bytes();
+    }
+    if let Some(position) = html.rfind("</body>") {
+        let mut output = String::with_capacity(html.len() + tag.len());
+        output.push_str(&html[..position]);
+        output.push_str(&tag);
+        output.push_str(&html[position..]);
+        return output.into_bytes();
+    }
+    format!("{}{}", html, tag).into_bytes()
+}
+
+fn static_response(method: &str, mime: &str, bytes: &[u8]) -> Option<Vec<u8>> {
     let len = bytes.len();
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
@@ -276,7 +324,7 @@ fn try_serve_static(method: &str, path: &str, root: &Path) -> Option<Vec<u8>> {
         Some(header.into_bytes())
     } else {
         let mut v = header.into_bytes();
-        v.extend_from_slice(&bytes);
+        v.extend_from_slice(bytes);
         Some(v)
     }
 }
@@ -498,7 +546,11 @@ mod smoke_tests {
         );
         s.write_all(req.as_bytes()).unwrap();
         let mut buf = Vec::new();
-        s.read_to_end(&mut buf).unwrap();
+        match s.read_to_end(&mut buf) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            Err(error) => panic!("read proxy response: {error}"),
+        }
         let mut header_end = 0;
         for i in 0..buf.len().saturating_sub(3) {
             if &buf[i..i + 4] == b"\r\n\r\n" {
@@ -524,6 +576,7 @@ mod smoke_tests {
 
     #[test]
     fn serves_static_index_without_deny_headers() {
+        let _guard = lock_proxy_test();
         let dir = setup_dist();
         let port = start(dir.path().to_str().unwrap(), 1).expect("start proxy");
 
@@ -547,6 +600,7 @@ mod smoke_tests {
 
     #[test]
     fn serves_static_assets_with_correct_mime() {
+        let _guard = lock_proxy_test();
         let dir = setup_dist();
         let port = start(dir.path().to_str().unwrap(), 1).expect("start proxy");
 
@@ -563,7 +617,56 @@ mod smoke_tests {
     }
 
     #[test]
+    fn injects_the_application_owned_presentation_enhancer_once() {
+        let _guard = lock_proxy_test();
+        let dir = setup_dist();
+        let port = start(dir.path().to_str().unwrap(), 1).expect("start proxy");
+
+        let (_headers, body) = http_get("127.0.0.1", port, "/");
+        let html = String::from_utf8(body).expect("HTML response");
+        assert_eq!(
+            html.matches("/__kuaifan__/control-ui-enhancer.js").count(),
+            1,
+            "the embedded UI must receive one presentation enhancer: {html}",
+        );
+        assert!(
+            html.contains(r#"<script src="/__kuaifan__/control-ui-enhancer.js"></script>"#),
+            "the injected script tag must be valid HTML: {html}",
+        );
+
+        stop();
+    }
+
+    #[test]
+    fn serves_the_application_owned_presentation_enhancer() {
+        let _guard = lock_proxy_test();
+        let dir = setup_dist();
+        let port = start(dir.path().to_str().unwrap(), 1).expect("start proxy");
+
+        let (headers, body) = http_get(
+            "127.0.0.1",
+            port,
+            "/__kuaifan__/control-ui-enhancer.js",
+        );
+        assert!(headers.starts_with("HTTP/1.1 200 OK"), "got {headers}");
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("content-type: application/javascript"),
+            "expected JavaScript MIME, got: {headers}",
+        );
+        assert!(
+            String::from_utf8(body)
+                .expect("enhancer source")
+                .contains("KuaifanControlUiPresentation"),
+        );
+
+        stop();
+    }
+
+    #[test]
     fn returns_502_when_upstream_unreachable() {
+        let _guard = lock_proxy_test();
         let dir = setup_dist();
         // 端口 1 一定不会有服务
         let port = start(dir.path().to_str().unwrap(), 1).expect("start proxy");
@@ -580,6 +683,7 @@ mod smoke_tests {
 
     #[test]
     fn current_url_reports_listening_port() {
+        let _guard = lock_proxy_test();
         let dir = setup_dist();
 
         // 之前可能跑过别的测试，先确保初始为 None
@@ -596,6 +700,7 @@ mod smoke_tests {
 
     #[test]
     fn blocks_path_traversal() {
+        let _guard = lock_proxy_test();
         let dir = setup_dist();
         let port = start(dir.path().to_str().unwrap(), 1).expect("start proxy");
 
@@ -718,6 +823,7 @@ mod idempotency_tests {
     /// 同一网关端口连续 start() 必须返回同一代理端口（避免前端每次点启动都换端口导致 iframe 重载）。
     #[test]
     fn start_is_idempotent_for_same_gateway_port() {
+        let _guard = lock_proxy_test();
         let tmp = std::env::temp_dir().join("kuaifanclaw_proxy_test");
         let _ = std::fs::create_dir_all(&tmp);
         let openclaw_root = tmp.join("openclaw").join("dist").join("control-ui");

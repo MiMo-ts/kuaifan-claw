@@ -243,6 +243,8 @@ fn apply_hermes_model_projection(
 async fn sync_hermes_configuration(data_dir: &str) -> Result<(), String> {
     crate::commands::instance::migrate_legacy_instances_to_modules(data_dir).await?;
     crate::commands::model::ensure_models_yaml_api_keys_are_plaintext(data_dir).await?;
+    let data_path = PathBuf::from(data_dir);
+    let managed_skill_root = crate::services::bundled_skills::bootstrap_managed_skill(&data_path)?;
 
     let module_dir = PathBuf::from(data_dir).join("modules").join("hermes");
     tokio::fs::create_dir_all(&module_dir)
@@ -265,6 +267,7 @@ async fn sync_hermes_configuration(data_dir: &str) -> Result<(), String> {
         .unwrap_or_default();
 
     apply_hermes_model_projection(&mut config, &models, data_dir);
+    crate::services::bundled_skills::register_hermes_skill_root(&mut config, &managed_skill_root);
 
     let config_yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(config))
         .map_err(|error| format!("序列化 Hermes 配置失败: {}", error))?;

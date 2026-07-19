@@ -326,10 +326,81 @@ def save_image(path_value: str, data: bytes) -> str:
     return str(path)
 
 
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def managed_output_root(runtime: str, config_path: str | None) -> pathlib.Path:
+    """Return the local media directory owned by the active agent runtime."""
+    hermes_home = os.environ.get("HERMES_HOME")
+    if runtime == "hermes" or (runtime == "auto" and hermes_home):
+        home = pathlib.Path(hermes_home) if hermes_home else pathlib.Path.home() / ".hermes"
+        return home / "image_cache" / "kuaifan-image"
+
+    state_dir = os.environ.get("OPENCLAW_STATE_DIR")
+    if state_dir:
+        return pathlib.Path(state_dir) / "media" / "kuaifan-image"
+    if config_path:
+        return pathlib.Path(config_path).expanduser().resolve().parent / "media" / "kuaifan-image"
+    return pathlib.Path.home() / ".openclaw" / "media" / "kuaifan-image"
+
+
+def allocate_output_path(
+    requested_path: str | None,
+    runtime: str,
+    config_path: str | None,
+) -> pathlib.Path:
+    """Allocate an image path without allowing the model to choose arbitrary files."""
+    root = managed_output_root(runtime, config_path).expanduser().resolve()
+    if not requested_path:
+        return root / f"kuaifan-{uuid.uuid4().hex}.png"
+
+    candidate = pathlib.Path(requested_path).expanduser().resolve()
+    if candidate.suffix.lower() not in _IMAGE_EXTENSIONS:
+        raise KuaifanImageError("输出文件必须是受支持的图片格式。")
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise KuaifanImageError("输出文件必须位于当前运行时的受管图片目录。") from exc
+    return candidate
+
+
+def build_media_marker(image_path):
+    """Return the ``MEDIA:/absolute/path`` directive the agent gateway expects.
+
+    Downstream auto-append paths (Hermes `_collect_auto_append_media_tags`)
+    match an absolute path that starts with `/`, `~/` or a Windows drive
+    letter and ends in a known deliverable extension. The Skill result must
+    surface that exact shape so the channel adapters' `send_image_file`
+    fires without depending on the model re-emitting the path in prose.
+
+    Returns `None` for empty / unrecognised inputs so callers can omit the
+    marker from the result payload instead of leaking a half-built string.
+    """
+    if not isinstance(image_path, str) or not image_path.strip():
+        return None
+    resolved = str(pathlib.Path(image_path).expanduser().resolve())
+    if not resolved:
+        return None
+    if not _DELIVERABLE_EXTENSIONS_RE.search(resolved):
+        return None
+    return f"MEDIA:{resolved}"
+
+
+# Mirrors `kuaifan_image_output._MEDIA_PATH_RE` so the script can guard
+# the success payload without importing the adapter module. Kept in sync
+# with `gateway/run.py` _TOOL_MEDIA_RE so the auto-append path matches.
+_DELIVERABLE_EXTENSIONS_RE = re.compile(
+    r"\.(?:png|jpe?g|gif|webp|mp4|mov|avi|mkv|webm|ogg|opus|mp3|wav|m4a|"
+    r"flac|epub|pdf|zip|rar|7z|docx?|xlsx?|pptx?|txt|csv|apk|ipa)$",
+    re.IGNORECASE,
+)
+
+
+
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(description="Generate or edit an image through Kuaifan.")
     command.add_argument("--prompt", required=True)
-    command.add_argument("--output", required=True)
+    command.add_argument("--output")
     command.add_argument("--source", action="append", default=[])
     command.add_argument("--model", default="doubao-seedream-5-0-pro-260628")
     command.add_argument("--size", default="1024x1024")
@@ -372,17 +443,30 @@ def main(argv: list[str] | None = None) -> int:
             }, ensure_ascii=False))
             return 0
 
+        output_path = allocate_output_path(args.output, args.runtime, args.config)
         payload, request_id = send_request(
             apply_authorization(request, provider["api_key"]), args.timeout, max(0, args.retries)
         )
-        image_data, image_url = image_bytes_from_response(payload, args.timeout)
-        image_path = save_image(args.output, image_data)
-        print(json.dumps({
+        image_data, _upstream_image_url = image_bytes_from_response(payload, args.timeout)
+        image_path = save_image(str(output_path), image_data)
+        media_marker = build_media_marker(image_path)
+        absolute_path = (
+            media_marker.removeprefix("MEDIA:")
+            if media_marker
+            else str(pathlib.Path(image_path).expanduser().resolve())
+        )
+        result = {
+            "artifact": "kuaifan-image/v1",
             "mode": mode,
             "image_path": image_path,
-            "image_url": image_url,
+            "absolute_path": absolute_path,
+            "image_url": None,
+            "media_marker": media_marker,
             "request_id": request_id,
-        }, ensure_ascii=False))
+        }
+        print(json.dumps(result, ensure_ascii=False))
+        if media_marker:
+            print(media_marker)
         return 0
     except KuaifanImageError as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)

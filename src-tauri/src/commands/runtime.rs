@@ -18,7 +18,7 @@ const NO_WINDOW: u32 = 0x08000000;
 
 const HERMES_DESKTOP_SESSION_TOKEN: &str = "kfc-desk-3463b6e3f34d0f12fc416939e9a81fc395f40f4730cfc145";
 const HERMES_BROWSER_BUNDLE_VERSION: &str = "3";
-const HERMES_AGENT_VERSION: &str = "0.18.2-kfc.3";
+const HERMES_AGENT_VERSION: &str = "0.18.2-kfc.4";
 
 fn hermes_agent_bundle_marker() -> String {
     format!("{}|kuaifanclaw-{}", HERMES_AGENT_VERSION, env!("CARGO_PKG_VERSION"))

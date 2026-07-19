@@ -1,11 +1,13 @@
 import importlib.util
 import inspect
 import json
+import os
 import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -167,6 +169,7 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(payload["n"], 1)
 
 
+
 class ImageResponseTests(unittest.TestCase):
     def test_invalid_base64_response_raises_a_safe_error(self):
         payload = json.dumps({"data": [{"b64_json": "%%%"}]}).encode("utf-8")
@@ -178,6 +181,92 @@ class ImageResponseTests(unittest.TestCase):
         with self.assertRaises(module.KuaifanImageError):
             module.image_bytes_from_response(payload, 1)
 
+
+class ScriptOutputContractTests(unittest.TestCase):
+    """Lock the on-the-wire JSON shape the runtime adapters depend on."""
+
+    def test_main_emits_media_marker_for_successful_response(self):
+        # Invoke main() in-process with a stubbed urlopen so the script path is
+        # exercised end-to-end (no subprocess). Asserts the success result has
+        # every field the channel adapter needs.
+        from unittest import mock
+        import base64
+        import io
+
+        fake_png_bytes = b"\x89PNG\r\n\x1a\nfake-bytes"
+        fake_png = base64.b64encode(fake_png_bytes).decode("ascii")
+        response_payload = json.dumps({"data": [{"b64_json": fake_png}]}).encode("utf-8")
+
+        fake_response = mock.MagicMock()
+        fake_response.read.return_value = response_payload
+        fake_response.headers.get.return_value = "req-id-1"
+        fake_response.__enter__.return_value = fake_response
+        fake_response.__exit__.return_value = False
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = pathlib.Path(directory) / "oc.json"
+            config_path.write_text(
+                json.dumps({"models": {"providers": {"openai": {"apiKey": "k", "baseUrl": "https://kuaifanio.cn/v1"}}}}),
+                encoding="utf-8",
+            )
+            argv = [
+                "kuaifan_image.py",
+                "--config", str(config_path),
+                "--prompt", "hello",
+            ]
+            stdout = io.StringIO()
+            with mock.patch.object(module, "urlopen", return_value=fake_response), \
+                 mock.patch.object(
+                     module,
+                     "image_bytes_from_response",
+                     return_value=(fake_png_bytes, "https://cdn.example.test/render.png"),
+                 ), \
+                 mock.patch.object(sys, "argv", argv), \
+                 mock.patch.object(sys.stdout, "write", stdout.write):
+                rc = module.main()
+        self.assertEqual(rc, 0)
+        output_lines = stdout.getvalue().splitlines()
+        payload = json.loads(output_lines[0])
+        self.assertEqual(payload["artifact"], "kuaifan-image/v1")
+        self.assertEqual(payload["mode"], "text_to_image")
+        self.assertTrue(payload["image_path"].endswith(".png"))
+        self.assertTrue(payload["absolute_path"].endswith(".png"))
+        self.assertTrue(payload["media_marker"].startswith("MEDIA:"))
+        self.assertTrue(payload["media_marker"].endswith(".png"))
+        self.assertEqual(output_lines[-1], payload["media_marker"])
+        self.assertEqual(payload["request_id"], "req-id-1")
+        self.assertIsNone(payload["image_url"])
+        # absolute_path and image_path both point at the requested output file.
+        # The actual write goes through save_image, covered by the dry-run test path
+        # and the manual integration check at the end of SKILL.md.
+
+    def test_build_media_marker_rejects_unanchored_paths(self):
+        self.assertIsNone(module.build_media_marker(None))
+        self.assertIsNone(module.build_media_marker(""))
+        self.assertIsNone(module.build_media_marker("   "))
+        # No extension -> rejected (Hermes regex needs deliverable extension).
+        with tempfile.TemporaryDirectory() as directory:
+            no_ext = pathlib.Path(directory) / "image"
+            no_ext.write_text("x")
+            self.assertIsNone(module.build_media_marker(str(no_ext)))
+
+
+class ManagedOutputPathTests(unittest.TestCase):
+    def test_hermes_outputs_are_allocated_under_its_managed_image_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.dict(os.environ, {"HERMES_HOME": directory}, clear=False):
+                output_path = module.allocate_output_path(None, "hermes", None)
+
+            root = pathlib.Path(directory, "image_cache", "kuaifan-image").resolve()
+            self.assertTrue(output_path.is_relative_to(root))
+            self.assertEqual(output_path.suffix, ".png")
+
+    def test_rejects_explicit_outputs_outside_the_managed_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            with mock.patch.dict(os.environ, {"HERMES_HOME": str(root / "hermes")}, clear=False):
+                with self.assertRaises(module.KuaifanImageError):
+                    module.allocate_output_path(str(root / "outside.png"), "hermes", None)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

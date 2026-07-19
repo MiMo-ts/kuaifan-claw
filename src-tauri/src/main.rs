@@ -568,6 +568,11 @@ fn main() {
     // 
     migrate_resources_on_first_run(&data_dir_abs, &exe_path);
 
+    match services::bundled_skills::bootstrap_managed_skill(&data_dir_abs) {
+        Ok(root) => tracing::info!("Managed bundled Skills ready at {}", root.display()),
+        Err(error) => tracing::warn!("Managed bundled Skills are unavailable: {}", error),
+    }
+
     // 
     match services::invite_code::is_invite_code_validated(&data_dir_abs) {
         Ok(true) => {
