@@ -93,3 +93,4 @@ bin/
 
 .cargo-test-hermes-runtime/
 .cargo-test-model-sync/
+.worktrees/
