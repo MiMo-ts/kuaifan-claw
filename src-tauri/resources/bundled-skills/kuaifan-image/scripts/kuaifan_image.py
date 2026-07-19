@@ -21,6 +21,16 @@ from urllib.request import Request, urlopen
 class KuaifanImageError(RuntimeError):
     """A user-safe error raised before an image request is made."""
 
+    def __init__(
+        self,
+        message: str,
+        error_code: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.retryable = retryable
+
 
 def resolve_secret(value: Any) -> str | None:
     """Resolve an API key literal or a full environment-variable reference."""
@@ -275,22 +285,34 @@ def apply_authorization(request: Request, api_key: str) -> Request:
 
 
 def send_request(request: Request, timeout: int, retries: int) -> tuple[bytes, str | None]:
-    """Send an image request, retrying only the upstream rate-limit response."""
+    """Send an image request, retrying transient upstream responses once."""
     for attempt in range(retries + 1):
         try:
             with urlopen(request, timeout=timeout) as response:
                 return response.read(), response.headers.get("x-request-id")
         except HTTPError as exc:
-            if exc.code != 429 or attempt == retries:
-                raise KuaifanImageError(f"快泛图片请求失败（HTTP {exc.code}）。") from exc
-            retry_after = exc.headers.get("Retry-After", "")
+            retryable = exc.code in {429, 502, 503, 504}
+            if not retryable or attempt == retries:
+                message = f"快泛图片请求失败（HTTP {exc.code}）。"
+                if retryable:
+                    message = f"快泛图片上游服务暂不可用（HTTP {exc.code}），请稍后重试。"
+                raise KuaifanImageError(
+                    message,
+                    error_code=f"upstream_http_{exc.code}",
+                    retryable=retryable,
+                ) from exc
+            retry_after = exc.headers.get("Retry-After", "") if exc.headers else ""
             try:
                 delay = max(1, min(60, int(retry_after)))
             except ValueError:
                 delay = min(30, 2 ** (attempt + 1))
             time.sleep(delay)
         except (URLError, OSError) as exc:
-            raise KuaifanImageError("快泛图片服务暂时不可达。") from exc
+            raise KuaifanImageError(
+                "快泛图片服务暂时不可达。",
+                error_code="upstream_unreachable",
+                retryable=True,
+            ) from exc
     raise KuaifanImageError("快泛图片请求未完成。")
 
 
@@ -469,7 +491,12 @@ def main(argv: list[str] | None = None) -> int:
             print(media_marker)
         return 0
     except KuaifanImageError as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        error = {"error": str(exc)}
+        if exc.error_code:
+            error["error_code"] = exc.error_code
+        if exc.retryable:
+            error["retryable"] = True
+        print(json.dumps(error, ensure_ascii=False), file=sys.stderr)
         return 1
 
 

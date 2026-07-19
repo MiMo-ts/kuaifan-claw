@@ -3065,13 +3065,33 @@ fn ensure_plugins_load_paths(base: &mut serde_json::Value, node_modules: &std::p
     info!("Plugins load paths set: {:?}", paths);
 }
 
+fn ensure_openclaw_model_providers(
+    base: &mut serde_json::Value,
+) -> Option<&mut serde_json::Map<String, serde_json::Value>> {
+    let root = base.as_object_mut()?;
+    let models = root
+        .entry("models".to_string())
+        .or_insert_with(|| json!({}));
+    if !models.is_object() {
+        *models = json!({});
+    }
+    let models = models.as_object_mut()?;
+    models
+        .entry("mode".to_string())
+        .or_insert_with(|| json!("merge"));
+    let providers = models
+        .entry("providers".to_string())
+        .or_insert_with(|| json!({}));
+    if !providers.is_object() {
+        *providers = json!({});
+    }
+    providers.as_object_mut()
+}
+
 /// 从 models.yaml 读取所有供应商的 API Key（解密后明文），写入 openclaw.json 的 models.providers.{id}.apiKey。
 /// 仅当 models.yaml 中存在对应 provider 且 api_key 非空时才覆盖。
 fn inject_provider_api_keys_into_openclaw_json(base: &mut serde_json::Value, data_dir: &str) {
-    let models_root = match base
-        .pointer_mut("/models/providers")
-        .and_then(|v| v.as_object_mut())
-    {
+    let models_root = match ensure_openclaw_model_providers(base) {
         Some(p) => p,
         None => return,
     };
@@ -3086,6 +3106,19 @@ fn inject_provider_api_keys_into_openclaw_json(base: &mut serde_json::Value, dat
         Ok(d) => d,
         Err(_) => return,
     };
+    let configured_kuaifan_model = doc
+        .get("default_model")
+        .filter(|default_model| {
+            default_model
+                .get("provider")
+                .and_then(|value| value.as_str())
+                == Some("kuaifan")
+        })
+        .and_then(|default_model| default_model.get("model_name"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|model_name| !model_name.is_empty())
+        .map(str::to_string);
     let providers_yaml = match doc.get("providers") {
         Some(serde_yaml::Value::Mapping(m)) => m,
         _ => return,
@@ -3131,9 +3164,81 @@ fn inject_provider_api_keys_into_openclaw_json(base: &mut serde_json::Value, dat
                     obj.insert("baseUrl".to_string(), json!(base_url));
                 }
             }
+            if pid == "kuaifan" {
+                obj.entry("api".to_string())
+                    .or_insert_with(|| json!("openai-completions"));
+                if let Some(model_name) = configured_kuaifan_model.as_deref() {
+                    let models = obj
+                        .entry("models".to_string())
+                        .or_insert_with(|| json!([]));
+                    if !models.is_array() {
+                        *models = json!([]);
+                    }
+                    if let Some(models) = models.as_array_mut() {
+                        let exists = models.iter().any(|model| {
+                            model.get("id").and_then(|value| value.as_str()) == Some(model_name)
+                        });
+                        if !exists {
+                            models.push(json!({
+                                "id": model_name,
+                                "name": model_name,
+                                "reasoning": false,
+                                "input": ["text"],
+                                "contextWindow": 128000,
+                                "maxTokens": 8192,
+                                "cost": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cacheRead": 0,
+                                    "cacheWrite": 0
+                                }
+                            }));
+                        }
+                    }
+                }
+            }
             info!("Injected provider into openclaw.json: {} (base_url={})", pid,
                   provider_val.get("base_url").and_then(|v| v.as_str()).unwrap_or("none"));
         }
+    }
+}
+
+#[cfg(test)]
+mod kuaifan_provider_config_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn injects_configured_kuaifan_provider_into_an_empty_model_catalog() {
+        let data_dir = tempfile::tempdir().expect("temporary data directory");
+        let config_dir = data_dir.path().join("config");
+        std::fs::create_dir_all(&config_dir).expect("create config directory");
+        std::fs::write(
+            config_dir.join("models.yaml"),
+            r#"
+default_model:
+  provider: kuaifan
+  model_name: MiniMax-M3
+providers:
+  kuaifan:
+    enabled: true
+    api_key: test-kuaifan-key
+    base_url: https://kuaifanio.cn/v1
+"#,
+        )
+        .expect("write models.yaml");
+
+        let mut openclaw_config = json!({});
+        inject_provider_api_keys_into_openclaw_json(
+            &mut openclaw_config,
+            data_dir.path().to_str().expect("UTF-8 data path"),
+        );
+
+        let provider = &openclaw_config["models"]["providers"]["kuaifan"];
+        assert_eq!(provider["apiKey"], "test-kuaifan-key");
+        assert_eq!(provider["baseUrl"], "https://kuaifanio.cn/v1");
+        assert_eq!(provider["api"], "openai-completions");
+        assert_eq!(provider["models"][0]["id"], "MiniMax-M3");
     }
 }
 
@@ -3147,10 +3252,7 @@ async fn inject_kuaifan_models_from_pricing(base: &mut serde_json::Value) {
         }
     };
 
-    let models_root = match base
-        .pointer_mut("/models/providers")
-        .and_then(|v| v.as_object_mut())
-    {
+    let models_root = match ensure_openclaw_model_providers(base) {
         Some(p) => p,
         None => return,
     };

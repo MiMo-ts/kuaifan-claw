@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from urllib.error import HTTPError
 from unittest import mock
 
 
@@ -239,6 +240,41 @@ class ScriptOutputContractTests(unittest.TestCase):
         # absolute_path and image_path both point at the requested output file.
         # The actual write goes through save_image, covered by the dry-run test path
         # and the manual integration check at the end of SKILL.md.
+
+    def test_main_reports_a_retryable_upstream_503_without_exposing_the_key(self):
+        import io
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = pathlib.Path(directory) / "oc.json"
+            config_path.write_text(
+                json.dumps({"models": {"providers": {"kuaifan": {"apiKey": "test-secret-key", "baseUrl": "https://kuaifanio.cn/v1"}}}}),
+                encoding="utf-8",
+            )
+            upstream_error = HTTPError(
+                "https://kuaifanio.cn/v1/images/generations",
+                503,
+                "Service Unavailable",
+                None,
+                None,
+            )
+            argv = [
+                "kuaifan_image.py",
+                "--config", str(config_path),
+                "--prompt", "hello",
+                "--retries", "0",
+            ]
+            stderr = io.StringIO()
+            with mock.patch.object(module, "urlopen", side_effect=upstream_error), \
+                 mock.patch.object(sys, "argv", argv), \
+                 mock.patch.object(sys.stderr, "write", stderr.write):
+                rc = module.main()
+
+        self.assertEqual(rc, 1)
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(payload["error_code"], "upstream_http_503")
+        self.assertTrue(payload["retryable"])
+        self.assertIn("HTTP 503", payload["error"])
+        self.assertNotIn("test-secret-key", stderr.getvalue())
 
     def test_build_media_marker_rejects_unanchored_paths(self):
         self.assertIsNone(module.build_media_marker(None))
