@@ -16,6 +16,10 @@ Kuaifan Claw owns the module entry, routing, UI, application installation, bundl
 
 The integration introduces a Codex adapter layer in `src-tauri`. The adapter exposes focused Tauri commands to the React module rather than importing Codex++'s monolithic manager UI or registering its existing command surface directly. It stores Codex module state under Kuaifan Claw's application data directory and keeps the real Codex runtime configuration in the user Codex home, matching Codex++'s established behavior.
 
+## Compatibility Boundary
+
+The Codex module is additive. It must not modify OpenClaw or Hermes runtime manifests, gateway commands, session protocols, installation commands, resource bundles, or their persisted data. Existing module selection keeps its current default behavior. Codex state is isolated under `modules/codex`, its Tauri commands use a `codex_` prefix, and its frontend routes and stores are read only when Codex is the active module. Regression tests must assert that OpenClaw and Hermes registry definitions, wizard steps, and installer command names remain unchanged.
+
 ## User Flow
 
 1. The user opens the module center and selects Codex.
