@@ -11,6 +11,8 @@ import {
   CxIconRobots,
 } from "../components/icons";
 import HermesPage from "./HermesPage";
+import CodexPage from "./CodexPage";
+import InfiniteCanvasPage from "./InfiniteCanvasPage";
 import ModuleGuiFrame from "../components/layout/ModuleGuiFrame";
 import { useAppStore } from "../stores/appStore";
 import { useModuleSessionStore } from "../stores/moduleSessionStore";
@@ -50,10 +52,21 @@ export default function HomePage() {
   const [isUpdating, setIsUpdating] = useState(false);
   const operationLockRef = useRef(false);
 
+  const canvasRuntime = runtimes.find((runtime) => runtime.id === "infinite_canvas");
   const hermesRuntime = runtimes.find((runtime) => runtime.id === "hermes") ?? null;
+  const isCanvas = activeModule === "infinite_canvas";
   const isHermes = activeModule === "hermes";
-  const isOnline = isHermes ? Boolean(hermesRuntime?.running) : Boolean(gatewayStatus?.running);
-  const activePort = isHermes ? hermesRuntime?.guiPort || 0 : gatewayStatus?.port || 0;
+  const isCodex = activeModule === "codex";
+  const isOnline = isHermes
+    ? Boolean(hermesRuntime?.running)
+    : isCanvas
+      ? Boolean(canvasRuntime?.running)
+      : Boolean(gatewayStatus?.running);
+  const activePort = isHermes
+    ? hermesRuntime?.guiPort || 0
+    : isCanvas
+      ? canvasRuntime?.guiPort || 0
+      : gatewayStatus?.port || 0;
 
   useEffect(() => {
     if (useAppStore.persist.hasHydrated()) {
@@ -90,6 +103,8 @@ export default function HomePage() {
       if (operationLockRef.current) return;
       if (activeModule === "hermes") {
         void checkRuntimeHealth("hermes");
+      } else if (activeModule === "infinite_canvas") {
+        void checkRuntimeHealth("infinite_canvas");
       } else {
         void loadOpenClawStatus();
       }
@@ -146,7 +161,8 @@ export default function HomePage() {
     operationLockRef.current = true;
     setGatewayBusy(true);
     const stopping = isOnline;
-    const toastId = toast.loading(stopping ? "正在停止网关..." : "正在启动网关...");
+    const moduleLabel = isHermes ? "Hermes" : isCanvas ? "画布与视频" : "网关";
+    const toastId = toast.loading(stopping ? `正在停止${moduleLabel}...` : `正在启动${moduleLabel}...`);
 
     try {
       if (isHermes) {
@@ -154,6 +170,19 @@ export default function HomePage() {
           await stopRuntime("hermes");
         } else {
           await startRuntime("hermes");
+        }
+        await scanRuntimes();
+      } else if (isCanvas) {
+        if (stopping) {
+          await stopRuntime("infinite_canvas");
+        } else {
+          // 启动前尽量确保运行时已安装；已安装时该命令是幂等刷新
+          try {
+            await invoke("install_infinite_canvas_runtime");
+          } catch {
+            // 若已安装但刷新失败，继续尝试 start；真正失败由 startRuntime 抛出
+          }
+          await startRuntime("infinite_canvas");
         }
         await scanRuntimes();
       } else if (stopping) {
@@ -164,11 +193,11 @@ export default function HomePage() {
         await invoke("start_gateway");
         await loadOpenClawStatus();
       }
-      toast.success(stopping ? "网关已停止" : "网关已启动", { id: toastId });
+      toast.success(stopping ? `${moduleLabel}已停止` : `${moduleLabel}已启动`, { id: toastId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toast.error(`操作失败：${message}`, { id: toastId });
-      if (isHermes) await scanRuntimes();
+      if (isHermes || isCanvas) await scanRuntimes();
       else await loadOpenClawStatus();
     } finally {
       setGatewayBusy(false);
@@ -178,6 +207,7 @@ export default function HomePage() {
     }
   }, [
     gatewayBusy,
+    isCanvas,
     isHermes,
     isOnline,
     loadOpenClawStatus,
@@ -215,7 +245,7 @@ export default function HomePage() {
       >
         <div className="flex min-w-0 items-center gap-3">
           <span className="text-[13px] font-semibold" style={{ color: "var(--cx-text)" }}>
-            {isHermes ? "Hermes" : "OpenClaw"}
+            {isHermes ? "Hermes" : isCanvas ? "画布与视频" : isCodex ? "Codex" : "OpenClaw"}
           </span>
           <span
             className="cx-badge"
@@ -284,7 +314,19 @@ export default function HomePage() {
       ) : null}
 
       <div className="min-h-0 flex-1">
-        {isHermes ? (
+        {isCodex ? (
+          <CodexPage />
+        ) : isCanvas ? (
+          <InfiniteCanvasPage
+            guiUrl={canvasRuntime?.guiUrl}
+            version={canvasRuntime?.version}
+            running={isOnline}
+            port={activePort}
+            busy={gatewayBusy}
+            onToggle={handleToggleGateway}
+            onRefresh={() => void scanRuntimes()}
+          />
+        ) : isHermes ? (
           <HermesPage
             guiUrl={hermesRuntime?.guiUrl}
             version={hermesRuntime?.version}

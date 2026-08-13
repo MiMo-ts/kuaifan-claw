@@ -1,0 +1,23 @@
+{
+  "id": "infinite_canvas",
+  "name": "infinite_canvas",
+  "version": "2026.08.03.6",
+  "entrypoint": "main.py",
+  "defaultPort": 18300,
+  "pythonSharedFrom": "bundled-hermes/python.zip",
+  "requires": [
+    "fastapi",
+    "uvicorn",
+    "requests",
+    "pydantic",
+    "python-multipart",
+    "httpx",
+    "pillow"
+  ],
+  "packagesZip": "packages.zip",
+  "file": "infinite-canvas.zip",
+  "bytes": 3252209,
+  "sha256": "67a37029d46e85a5ed681beca3c2c0a2b73291999b01c0a379d274f016dcacba",
+  "updated_at": "2026-08-03T16:21:58",
+  "notes": "sidebar rename cachebust + model-locked 720/1080 resolution"
+}

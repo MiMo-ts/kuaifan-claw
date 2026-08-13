@@ -275,12 +275,17 @@ fn try_serve_static(method: &str, path: &str, root: &Path) -> Option<Vec<u8>> {
     if path == CONTROL_UI_ENHANCER_PATH {
         return static_response(method, "application/javascript; charset=utf-8", CONTROL_UI_ENHANCER.as_bytes());
     }
-    let p = path.trim_start_matches('/');
-    let p = if p.is_empty() { "index.html" } else { p };
-    let full = root.join(p);
-    if !full.is_file() {
+    let requested = path.trim_start_matches('/');
+    let p = if requested.is_empty() {
+        "index.html"
+    } else if root.join(requested).is_file() {
+        requested
+    } else if is_control_ui_spa_route(path) {
+        "index.html"
+    } else {
         return None;
-    }
+    };
+    let full = root.join(p);
     let bytes = std::fs::read(&full).ok()?;
     let served = if p.eq_ignore_ascii_case("index.html") {
         std::str::from_utf8(&bytes)
@@ -290,6 +295,31 @@ fn try_serve_static(method: &str, path: &str, root: &Path) -> Option<Vec<u8>> {
         bytes
     };
     static_response(method, guess_mime(p), &served)
+}
+
+fn is_control_ui_spa_route(path: &str) -> bool {
+    let normalized = path.trim_end_matches('/');
+    matches!(
+        normalized,
+        "/chat"
+            | "/overview"
+            | "/activity"
+            | "/workboard"
+            | "/instances"
+            | "/sessions"
+            | "/usage"
+            | "/cron"
+            | "/agents"
+            | "/skills"
+            | "/nodes"
+            | "/dreaming"
+            | "/config"
+            | "/debug"
+            | "/logs"
+    ) || normalized.starts_with("/skills/")
+        || normalized.starts_with("/agents/")
+        || normalized.starts_with("/sessions/")
+        || normalized.starts_with("/instances/")
 }
 
 fn inject_control_ui_enhancer(html: &str) -> Vec<u8> {
@@ -632,6 +662,28 @@ mod smoke_tests {
         assert!(
             html.contains(r#"<script src="/__kuaifan__/control-ui-enhancer.js"></script>"#),
             "the injected script tag must be valid HTML: {html}",
+        );
+
+        stop();
+    }
+
+    #[test]
+    fn serves_enhanced_index_for_spa_chat_route() {
+        let _guard = lock_proxy_test();
+        let dir = setup_dist();
+        let port = start(dir.path().to_str().unwrap(), 1).expect("start proxy");
+
+        let (headers, body) = http_get(
+            "127.0.0.1",
+            port,
+            "/chat?session=agent%3Amain%3Amain",
+        );
+        let html = String::from_utf8(body).expect("HTML response");
+        assert!(headers.starts_with("HTTP/1.1 200 OK"), "got {headers}");
+        assert_eq!(
+            html.matches("/__kuaifan__/control-ui-enhancer.js").count(),
+            1,
+            "SPA chat routes must receive the enhanced index: {html}",
         );
 
         stop();

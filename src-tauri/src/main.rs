@@ -548,6 +548,11 @@ fn main() {
             .display()
     );
 
+    // Ensure OpenClaw/Hermes managed tools (node/git/bash/python) are on user + process PATH.
+    if let Err(error) = env_paths::ensure_managed_tool_path(&data_dir_for_state) {
+        tracing::warn!("同步托管工具 PATH 失败（非致命）: {}", error);
+    }
+
     let dirs = [
         "config",
         "instances",
@@ -628,6 +633,12 @@ fn main() {
             commands::installer::get_openclaw_cn_status,
             commands::installer::get_openclaw_install_status,
             commands::installer::start_openclaw_background_install,
+            commands::codex::get_codex_install_status,
+            commands::codex::start_codex_chatgpt_install,
+            commands::codex_runtime::get_codex_runtime_status,
+            commands::codex_runtime::get_codex_manager_preferences,
+            commands::codex_runtime::save_and_launch_codex_kuaifan,
+            commands::codex_runtime::save_codex_manager_preferences,
             commands::plugin::list_plugins,
             commands::plugin::check_plugin_installed,
             commands::plugin::install_plugin,
@@ -662,6 +673,7 @@ fn main() {
             commands::model::get_default_model,
             commands::model::set_default_model,
             commands::model::list_models,
+            commands::model::list_codex_kuaifan_marketplace_models,
             commands::robot::list_robot_templates,
             commands::robot::get_robot_skills,
             commands::robot::get_robot_mcp_recommendations,
@@ -760,12 +772,21 @@ fn main() {
             // Token commands
             commands::token::auto_configure_api_key,
             // Hermes runtime management
+            commands::hermes_media::export_hermes_image,
+            commands::hermes_media::export_hermes_media,
+            commands::hermes_media::read_hermes_image_data_url,
+            commands::hermes_media::read_hermes_media_data_url,
+            commands::hermes_media::open_hermes_image_folder,
+            commands::hermes_media::open_hermes_media_folder,
             commands::runtime::scan_runtimes,
             commands::runtime::get_runtime_list,
             commands::runtime::start_runtime,
             commands::runtime::stop_runtime,
             commands::runtime::get_runtime_status,
             commands::runtime::install_hermes_runtime,
+            commands::infinite_canvas::check_infinite_canvas_bundled,
+            commands::infinite_canvas::install_infinite_canvas_runtime,
+            commands::infinite_canvas::get_infinite_canvas_status,
         ])
         .setup(|app| {
             tracing::info!("Tauri app initialization complete");

@@ -15,6 +15,8 @@ export interface HermesAttachment {
   mime: string;
   size: number;
   url: string;
+  localPath?: string;
+  exportDir?: string;
   kind?: "image" | "video" | "audio" | "document" | "file";
   state?: "pending" | "uploading" | "uploaded" | "error";
   previewUrl?: string;
@@ -102,10 +104,23 @@ export type HermesStreamEvent =
     status?: "done" | "error";
     durationS?: number;
   }
+  | {
+    type: "clarify";
+    requestId: string;
+    question: string;
+    choices?: string[];
+  }
   | { type: "final"; messageId?: string; text?: string; status?: string; reasoningTokens?: number }
   | { type: "aborted" }
   | { type: "error"; message: string }
   | { type: "meta"; model?: string; title?: string; reasoningTokens?: number; reasoningEffort?: string };
+
+/** Pending interactive clarify prompt from the Hermes runtime. */
+export interface HermesClarifyPrompt {
+  requestId: string;
+  question: string;
+  choices?: string[];
+}
 
 export interface HermesStartChatPayload {
   sessionId?: string;

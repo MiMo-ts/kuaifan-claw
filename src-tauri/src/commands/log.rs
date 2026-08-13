@@ -70,19 +70,22 @@ pub async fn read_runtime_logs_tail(
     let data_dir = data_dir.inner().get_data_dir();
     let n = lines.unwrap_or(400).min(3000).max(50);
 
-    // Hermes: 读取实际网关日志路径 %LOCALAPPDATA%/hermes/logs/gateway-stdio.log
-    let hermes_gateway_log = std::env::var("LOCALAPPDATA")
-        .map(|p| format!("{}/hermes/logs/gateway-stdio.log", p))
-        .unwrap_or_default();
-
-    let gateway_path = if module.as_deref() == Some("hermes") {
-        if std::path::Path::new(&hermes_gateway_log).exists() {
-            hermes_gateway_log
-        } else {
-            format!("{}/runtimes/hermes/hermes_runtime.log", data_dir)
+    // 按模块划分网关日志：OpenClaw / Hermes / 无限画布
+    let gateway_path = match module.as_deref() {
+        Some("hermes") => {
+            let hermes_gateway_log = std::env::var("LOCALAPPDATA")
+                .map(|p| format!("{}/hermes/logs/gateway-stdio.log", p))
+                .unwrap_or_default();
+            if std::path::Path::new(&hermes_gateway_log).exists() {
+                hermes_gateway_log
+            } else {
+                format!("{}/runtimes/hermes/hermes_runtime.log", data_dir)
+            }
         }
-    } else {
-        format!("{}/logs/{}", data_dir, OPENCLAW_GATEWAY_LOG)
+        Some("infinite_canvas") => {
+            format!("{}/runtimes/infinite_canvas/infinite_canvas_runtime.log", data_dir)
+        }
+        _ => format!("{}/logs/{}", data_dir, OPENCLAW_GATEWAY_LOG),
     };
     let manager_path = format!("{}/logs/app.log", data_dir);
 
@@ -106,23 +109,30 @@ pub async fn clear_openclaw_gateway_log(
     module: Option<String>,
 ) -> Result<String, String> {
     let data_dir = data_dir.inner().get_data_dir();
-    let hermes_gateway_log = std::env::var("LOCALAPPDATA")
-        .map(|p| format!("{}/hermes/logs/gateway-stdio.log", p))
-        .unwrap_or_default();
-
-    let path = if module.as_deref() == Some("hermes") {
-        if std::path::Path::new(&hermes_gateway_log).exists() {
-            hermes_gateway_log
-        } else {
-            format!("{}/runtimes/hermes/hermes_runtime.log", data_dir)
+    let path = match module.as_deref() {
+        Some("hermes") => {
+            let hermes_gateway_log = std::env::var("LOCALAPPDATA")
+                .map(|p| format!("{}/hermes/logs/gateway-stdio.log", p))
+                .unwrap_or_default();
+            if std::path::Path::new(&hermes_gateway_log).exists() {
+                hermes_gateway_log
+            } else {
+                format!("{}/runtimes/hermes/hermes_runtime.log", data_dir)
+            }
         }
-    } else {
-        format!("{}/logs/{}", data_dir, OPENCLAW_GATEWAY_LOG)
+        Some("infinite_canvas") => {
+            format!("{}/runtimes/infinite_canvas/infinite_canvas_runtime.log", data_dir)
+        }
+        _ => format!("{}/logs/{}", data_dir, OPENCLAW_GATEWAY_LOG),
     };
     tokio::fs::write(&path, "")
         .await
         .map_err(|e| format!("清空网关日志失败: {}", e))?;
-    let label = if module.as_deref() == Some("hermes") { "Hermes" } else { "OpenClaw" };
+    let label = match module.as_deref() {
+        Some("hermes") => "Hermes",
+        Some("infinite_canvas") => "无限画布",
+        _ => "OpenClaw",
+    };
     Ok(format!("{} 网关日志已清空", label))
 }
 

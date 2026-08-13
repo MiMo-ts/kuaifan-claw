@@ -94,3 +94,21 @@ bin/
 .cargo-test-hermes-runtime/
 .cargo-test-model-sync/
 .worktrees/
+
+# Scratch / debug files from AI sessions
+_*
+.tmp*
+.qa/
+.superpowers/
+build_1.0.*
+check_*
+probe_*.py
+__pycache__/
+*.bak-*
+
+# Extracted runtimes (tracked patches remain; bundles via download-bundles)
+src-tauri/runtimes/hermes/
+win/_hermes-tmp*/
+
+# Bundled zip exceptions
+!src-tauri/bundled-infinite-canvas/*.zip

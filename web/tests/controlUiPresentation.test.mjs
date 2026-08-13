@@ -28,10 +28,20 @@ test("collapses one exact consecutive assistant-text repeat", () => {
   assert.equal(api.collapseExactDuplicateText(`${text}\n不同的文本。`), `${text}\n不同的文本。`);
 });
 
-test("does not collapse short repeated text or structured content", () => {
+test("collapses three or more exact consecutive assistant-text repeats", () => {
+  const api = loadPresentationApi();
+  const text = "快泛接口已返回结果，正在生成回复。";
+
+  assert.equal(
+    api.collapseExactDuplicateText(`${text}\n${text}\n${text}\n${text}`),
+    text,
+  );
+});
+
+test("collapses a short exact execution-status repeat but preserves structured content", () => {
   const api = loadPresentationApi();
 
-  assert.equal(api.collapseExactDuplicateText("好的\n好的"), "好的\n好的");
+  assert.equal(api.collapseExactDuplicateText("waitwait"), "wait");
   assert.equal(api.collapseExactDuplicateText("```txt\ncopy\n```\n```txt\ncopy\n```"), "```txt\ncopy\n```\n```txt\ncopy\n```");
 });
 
@@ -64,5 +74,32 @@ test("finds assistant groups inside nested open Shadow DOM", () => {
   assert.deepEqual(
     Array.from(api.findAssistantGroups(documentRoot)),
     [assistantGroup],
+  );
+});
+
+test("finds assistant and tool groups inside nested open Shadow DOM", () => {
+  const api = loadPresentationApi();
+  assert.equal(typeof api.findChatGroups, "function");
+
+  const assistantGroup = { id: "assistant-group" };
+  const toolGroup = { id: "tool-group" };
+  const nestedShadowRoot = {
+    querySelectorAll(selector) {
+      if (selector === ".chat-group.assistant") return [assistantGroup];
+      if (selector === ".chat-group.tool") return [toolGroup];
+      return [];
+    },
+  };
+  const shadowHost = { shadowRoot: nestedShadowRoot };
+  const documentRoot = {
+    querySelectorAll(selector) {
+      if (selector === "*") return [shadowHost];
+      return [];
+    },
+  };
+
+  assert.deepEqual(
+    Array.from(api.findChatGroups(documentRoot)),
+    [assistantGroup, toolGroup],
   );
 });

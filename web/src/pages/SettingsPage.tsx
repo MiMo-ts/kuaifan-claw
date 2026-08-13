@@ -32,6 +32,19 @@ import { updateService, ReleaseInfo } from '../services/updateService';
 
 interface RuntimeLogsTail { gateway: string; manager: string; }
 
+function moduleGatewayLogPathLabel(moduleId: string): string {
+  switch (moduleId) {
+    case 'hermes':
+      return '%LOCALAPPDATA%/hermes/logs/*.log';
+    case 'infinite_canvas':
+      return 'runtimes/infinite_canvas/infinite_canvas_runtime.log';
+    case 'openclaw':
+    default:
+      return 'logs/openclaw-gateway.log';
+  }
+}
+
+
 const ansiUp = new AnsiUp();
 
 function escapeHtml(text: string): string {
@@ -241,7 +254,7 @@ export default function SettingsPage() {
                 </div>
               }>
               <div className="space-y-3">
-                <LogBlock label={`${activeModuleDefinition.name} 网关`} filePath={activeModule === 'hermes' ? '%LOCALAPPDATA%/hermes/logs/*.log' : 'logs/openclaw-gateway.log'}
+                <LogBlock label={`${activeModuleDefinition.name} 网关`} filePath={moduleGatewayLogPathLabel(activeModule)}
                   html={runtimeLogs?.gateway?.trim() ? ansiToHtmlGatewayLog(runtimeLogs.gateway) : escapeHtml('（暂无网关日志；启动网关后 stdout/stderr 将写入此文件）')}
                   empty={!runtimeLogs?.gateway?.trim()} onExpand={() => openLogModal('gateway')} preRef={logPreRef} />
                 <LogBlock label="管理端（Tauri）" filePath="logs/app.log"
@@ -402,7 +415,7 @@ export default function SettingsPage() {
                   {logModal.type === 'gateway' ? `${activeModuleDefinition.name} 网关日志` : '管理端日志'}
                 </h3>
                 <p className="text-[11px] mt-0.5" style={{ color: C.textMute }}>
-                  {logModal.type === 'gateway' ? `${activeModule === 'hermes' ? '%LOCALAPPDATA%/hermes/logs/*.log' : 'logs/openclaw-gateway.log'} · 实时输出` : 'logs/app.log · 实时输出'}
+                  {logModal.type === 'gateway' ? `${moduleGatewayLogPathLabel(activeModule)} · 实时输出` : 'logs/app.log · 实时输出'}
                 </p>
               </div>
               <div className="flex items-center gap-2">

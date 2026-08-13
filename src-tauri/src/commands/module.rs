@@ -41,12 +41,20 @@ const MODULE_CATALOG: &[ModuleDescriptor] = &[
         supports_instances: false,
         supports_gateway_logs: false,
     },
+    ModuleDescriptor {
+        id: "infinite_canvas",
+        name: "无限画布",
+        available: true,
+        supports_instances: false,
+        supports_gateway_logs: true,
+    },
 ];
 
 pub fn module_gateway_log_filename(module_id: &str) -> Option<&'static str> {
     match module_id {
         "openclaw" => Some("openclaw-gateway.log"),
         "hermes" => Some("hermes_runtime.log"),
+        "infinite_canvas" => Some("infinite_canvas_runtime.log"),
         _ => None,
     }
 }
@@ -57,6 +65,7 @@ fn module_gateway_log_path(data_dir: &str, module_id: &str) -> Result<PathBuf, S
             .join("logs")
             .join("openclaw-gateway.log")),
         "hermes" => Ok(crate::commands::runtime::runtime_log_path(data_dir, "hermes")),
+        "infinite_canvas" => Ok(crate::commands::runtime::runtime_log_path(data_dir, "infinite_canvas")),
         _ => Err(format!("模块 '{}' 尚未提供网关日志适配器", module_id)),
     }
 }
@@ -314,13 +323,15 @@ pub async fn sync_module_configuration(module_id: &str, data_dir: &str) -> Resul
     match module_id {
         "openclaw" => crate::commands::gateway::sync_openclaw_config_from_manager(data_dir).await,
         "hermes" => sync_hermes_configuration(data_dir).await,
+        "infinite_canvas" => crate::commands::infinite_canvas::sync_infinite_canvas_configuration(data_dir).await,
         _ => Err(format!("模块 '{}' 尚未提供配置适配器", module_id)),
     }
 }
 
 pub async fn sync_all_module_configurations(data_dir: &str) -> Result<(), String> {
     sync_module_configuration("openclaw", data_dir).await?;
-    sync_module_configuration("hermes", data_dir).await
+    sync_module_configuration("hermes", data_dir).await?;
+    sync_module_configuration("infinite_canvas", data_dir).await
 }
 
 fn project_hermes_feishu_env(env: &str, config: Option<&serde_yaml::Value>) -> String {
@@ -520,6 +531,7 @@ mod tests {
     fn resolves_gateway_logs_per_module() {
         assert_eq!(module_gateway_log_filename("openclaw"), Some("openclaw-gateway.log"));
         assert_eq!(module_gateway_log_filename("hermes"), Some("hermes_runtime.log"));
+        assert_eq!(module_gateway_log_filename("infinite_canvas"), Some("infinite_canvas_runtime.log"));
         assert_eq!(module_gateway_log_filename("codex"), None);
     }
 

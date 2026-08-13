@@ -1,11 +1,12 @@
 {
   "name": "openclaw-cn-manager",
-  "version": "1.0.69",
+  "version": "1.0.128",
   "description": "OpenClaw-CN Manager - 一站式安装与管理系统",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "node --test tests\\\\*.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev -- --no-default-features",

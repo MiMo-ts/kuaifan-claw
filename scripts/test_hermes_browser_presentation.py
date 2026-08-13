@@ -183,7 +183,6 @@ def test_bundled_archive_contains_current_browser_tool() -> None:
 
 
 def test_release_versions_are_consistent() -> None:
-    expected_version = "1.0.69"
     cargo_toml = (REPOSITORY_ROOT / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
     tauri_config = json.loads(
         (REPOSITORY_ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8")
@@ -192,9 +191,8 @@ def test_release_versions_are_consistent() -> None:
     cargo_version = re.search(r'^version\s*=\s*"([^"]+)"', cargo_toml, re.MULTILINE)
 
     assert cargo_version is not None
-    assert cargo_version.group(1) == expected_version
-    assert tauri_config["version"] == expected_version
-    assert web_package["version"] == expected_version
+    assert cargo_version.group(1) == tauri_config["version"]
+    assert cargo_version.group(1) == web_package["version"]
 
 
 if __name__ == "__main__":

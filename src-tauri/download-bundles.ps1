@@ -464,7 +464,16 @@ if (-not $PluginsOnly) {
     $nodeUrl  = "https://npmmirror.com/mirrors/node/v24.15.0/node-v24.15.0-win-x64.zip"
     Download-File $nodeUrl $nodeDest "Node.js v24.15.0" (5MB)
 
-    # ── A2. MinGit ────────────────────────────────────────────────────────
+    # ── A2. PortableGit (Hermes bash) ───────────────────────────────────
+    $portableGitDest = Join-Path $SrcTauri "bundled-env\PortableGit-2.53.0-64-bit.zip"
+    if (Test-Path $portableGitDest) {
+        $size = [math]::Round((Get-Item $portableGitDest).Length / 1MB, 1)
+        Write-Host "[跳过] PortableGit 已就绪 ($size MB)"
+    } else {
+        Write-Host "[警告] 缺少 PortableGit-2.53.0-64-bit.zip（Hermes 需要 bash）。请先准备该离线包。"
+    }
+
+    # ── A2b. MinGit (legacy fallback, no bash) ────────────────────────────
     $gitDest = Join-Path $SrcTauri "bundled-env\MinGit-2.53.0-64-bit.zip"
     $gitUrl  = "https://npmmirror.com/mirrors/git-for-windows/v2.53.0.windows.1/MinGit-2.53.0-64-bit.zip"
     Download-File $gitUrl $gitDest "MinGit 2.53.0" (400KB)

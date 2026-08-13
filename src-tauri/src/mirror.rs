@@ -47,9 +47,11 @@ const MINGIT_MIRRORS: &[&str] = &[
     "https://ghproxy.com/https://github.com/git-for-windows/git/releases/download/",
 ];
 
-/// 自包含 Git 便携版版本号（MinGit 精简版，无 GUI / TTY 交互，体积小）
+/// 自包含 Git 便携版版本号（PortableGit 含 bash，Hermes 必需）
 pub const MINGIT_VERSION: &str = "v2.53.0.windows.1";
-/// MinGit 便携版 zip 文件名（win-x64，与 GitHub release 资源名一致）
+/// Preferred offline Git package: PortableGit includes bash.exe for Hermes.
+pub const PORTABLE_GIT_ZIP: &str = "PortableGit-2.53.0-64-bit.zip";
+/// Legacy MinGit package (no bash). Kept only as a last-resort offline fallback.
 pub const MINGIT_ZIP: &str = "MinGit-2.53.0-64-bit.zip";
 /// MinGit 官方 releases 目录路径（URL path segment）
 pub const MINGIT_FILENAME: &str = "v2.53.0.windows.1/MinGit-2.53.0-64-bit.zip";

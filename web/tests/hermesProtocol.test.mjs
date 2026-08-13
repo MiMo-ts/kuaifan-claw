@@ -32,8 +32,12 @@ test("Hermes attachment helper module is available", () => {
 if (attachmentModuleExists) {
   const {
     attachmentSendState,
+    attachmentExportName,
     classifyAttachment,
+    extractKuaifanExportDirectories,
+    extractKuaifanToolAttachments,
     extractAssistantAttachments,
+    mergeAssistantAttachments,
     normalizeAttachmentFallback,
     resolveAttachmentUrl,
     toPromptAttachmentIds,
@@ -66,6 +70,71 @@ if (attachmentModuleExists) {
     const result = extractAssistantAttachments("Done\nMEDIA:https://cdn.example.test/render.mp4");
     assert.equal(result.text, "Done");
     assert.deepEqual(result.attachments.map((attachment) => attachment.kind), ["video"]);
+  });
+
+  test("extracts a local Windows MEDIA directive for authenticated preview", () => {
+    const result = extractAssistantAttachments(
+      "Image ready\nMEDIA:D:\\kuaifanclaw\\data\\modules\\hermes\\image_cache\\kuaifan-image\\result.jpg",
+    );
+
+    assert.equal(result.text, "Image ready");
+    assert.equal(result.attachments.length, 1);
+    assert.equal(result.attachments[0].kind, "image");
+    assert.equal(
+      result.attachments[0].localPath,
+      "D:\\kuaifanclaw\\data\\modules\\hermes\\image_cache\\kuaifan-image\\result.jpg",
+    );
+    assert.equal(attachmentExportName(result.attachments[0]), "result.jpg");
+  });
+
+  test("accepts export directory only from a matching Kuaifan artifact", () => {
+    const source = "D:\\kuaifanclaw\\data\\modules\\hermes\\image_cache\\kuaifan-image\\result.jpg";
+    const destinations = extractKuaifanExportDirectories([
+      { result: `${JSON.stringify({ artifact: "kuaifan-image/v1", image_path: source, export_dir: "D:\\designs" })}\nMEDIA:${source}` },
+      { result: JSON.stringify({ artifact: "other", image_path: source, export_dir: "D:\\ignored" }) },
+    ]);
+    assert.equal(destinations.get(source), "D:\\designs");
+    assert.equal(destinations.has("D:\\ignored"), false);
+  });
+
+  test("extracts kuaifan-video tool JSON into a playable local video attachment", () => {
+    const videoPath = "D:\\快泛claw\\data\\modules\\hermes\\video_cache\\kuaifan-video\\clip.mp4";
+    const result = extractKuaifanToolAttachments([
+      {
+        name: "terminal",
+        result: JSON.stringify({
+          artifact: "kuaifan-video/v1",
+          mode: "text_to_video",
+          video_path: videoPath,
+          absolute_path: videoPath,
+          model: "doubao-seedance-2-0-260128",
+          resolution: "720p",
+        }),
+      },
+    ]);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].kind, "video");
+    assert.equal(result[0].localPath, videoPath);
+    assert.equal(result[0].mime, "video/mp4");
+  });
+
+  test("merges MEDIA and kuaifan tool attachments without duplicates", () => {
+    const videoPath = "D:\\kuaifanclaw\\data\\modules\\hermes\\video_cache\\kuaifan-video\\clip.mp4";
+    const fromMedia = extractAssistantAttachments(`ready\nMEDIA:${videoPath}`).attachments;
+    const fromTool = extractKuaifanToolAttachments([
+      { result: JSON.stringify({ artifact: "kuaifan-video/v1", video_path: videoPath }) },
+    ]);
+    const merged = mergeAssistantAttachments(fromMedia, fromTool);
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].kind, "video");
+  });
+
+  test("extracts quoted local video paths from assistant prose", () => {
+    const videoPath = "D:\\快泛claw\\data\\modules\\hermes\\video_cache\\kuaifan-video\\kuaifan-video-abc.mp4";
+    const result = extractAssistantAttachments(`视频已保存到：\`${videoPath}\``);
+    assert.equal(result.attachments.length, 1);
+    assert.equal(result.attachments[0].kind, "video");
+    assert.equal(result.attachments[0].localPath, videoPath);
   });
 
   test("normalizes object attachment fallbacks before they reach React", () => {

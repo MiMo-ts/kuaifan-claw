@@ -2,6 +2,9 @@
 pub mod backup;
 pub mod config;
 pub mod control_ui_proxy;
+pub mod codex;
+pub mod codex_runtime;
+pub mod kuaifan_stream_proxy;
 pub mod env;
 pub mod feishu_wizard;
 pub mod gateway;
@@ -24,4 +27,6 @@ pub mod usage;
 pub mod auth;
 pub mod token;
 pub mod hermes_const;
+pub mod hermes_media;
+pub mod infinite_canvas;
 pub mod runtime;

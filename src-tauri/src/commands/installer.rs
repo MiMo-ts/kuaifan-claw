@@ -6,7 +6,7 @@ use crate::bundled_env::{
 };
 use crate::commands::hidden_cmd;
 use crate::env_paths::{
-    build_deps_env_path, env_root, git_exe, git_exists, node_exe, resolve_node, unzip,
+    build_deps_env_path, ensure_managed_tool_path, env_root, git_bash_exists, git_exe, git_exists, node_exe, resolve_node, unzip,
 };
 #[cfg(target_os = "macos")]
 use crate::mirror::github_mirror_urls;
@@ -85,6 +85,12 @@ const NODE_WIN_ZIP: &str = "node-v24.15.0-win-x64.zip";
 #[cfg(not(windows))]
 const NODE_LINUX_TAR: &str = "node-v24.15.0-linux-x64.tar.gz";
 
+fn persist_managed_tools(data_dir: &str) {
+    if let Err(error) = ensure_managed_tool_path(data_dir) {
+        tracing::warn!("写入托管工具 PATH 失败（非致命）: {}", error);
+    }
+}
+
 #[tauri::command]
 pub async fn install_node(
     app: AppHandle,
@@ -103,6 +109,7 @@ pub async fn install_node(
                 &app,
                 InstallProgressEvent::finished("node", &format!("使用系统 Node.js（{}）", v)),
             );
+            persist_managed_tools(&base);
             return Ok(format!("Node.js 已安装（系统）：{}", v));
         }
     }
@@ -122,6 +129,7 @@ pub async fn install_node(
                             &format!("使用内置 Node.js（{}）", v),
                         ),
                     );
+                    persist_managed_tools(&base);
                     return Ok(format!("Node.js 已安装（内置）：{}", v));
                 }
             }
@@ -138,6 +146,7 @@ pub async fn install_node(
                             &format!("使用内置 Node.js（{}）", v),
                         ),
                     );
+                    persist_managed_tools(&base);
                     return Ok(format!("Node.js 已安装（内置）：{}", v));
                 }
             }
@@ -223,6 +232,7 @@ pub async fn install_node(
             &app,
             InstallProgressEvent::finished("node", &format!("Node.js 安装完成（{}）", v_out)),
         );
+        persist_managed_tools(&base);
         Ok(format!("Node.js 安装成功（自包含）：{}", v_out))
     }
 
@@ -372,6 +382,7 @@ pub async fn install_node(
             &app,
             InstallProgressEvent::finished("node", &format!("Node.js 安装完成（{}）", v_out)),
         );
+        persist_managed_tools(&base);
         Ok(format!("Node.js 安装成功（自包含）：{}", v_out))
     }
 }
@@ -520,6 +531,7 @@ pub async fn install_git(
             if output.status.success() {
                 let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 emit(&app, InstallProgressEvent::finished("git", &format!("使用系统 Git（{}）", v)));
+                persist_managed_tools(&base);
                 return Ok(format!("Git 已安装（系统）：{}", v));
             }
         }
@@ -530,13 +542,15 @@ pub async fn install_git(
             if output.status.success() {
                 let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 emit(&app, InstallProgressEvent::finished("git", &format!("使用系统 Git（{}）", v)));
+                persist_managed_tools(&base);
                 return Ok(format!("Git 已安装（系统）：{}", v));
             }
         }
     }
 
     // ── 2. 检测内置 Git ─────────────────────────────────
-    if git_exists(&env_dir) {
+        // Hermes needs bash.exe. MinGit-only installs must be upgraded to PortableGit.
+    if git_exists(&env_dir) && (cfg!(not(windows)) || git_bash_exists(&env_dir)) {
         let git_v = git_exe(&env_dir);
         #[cfg(windows)]
         {
@@ -544,6 +558,7 @@ pub async fn install_git(
                 if output.status.success() {
                     let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     emit(&app, InstallProgressEvent::finished("git", &format!("使用内置 Git（{}）", v)));
+                    persist_managed_tools(&base);
                     return Ok(format!("Git 已安装（内置）：{}", v));
                 }
             }
@@ -554,6 +569,7 @@ pub async fn install_git(
                 if output.status.success() {
                     let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     emit(&app, InstallProgressEvent::finished("git", &format!("使用内置 Git（{}）", v)));
+                    persist_managed_tools(&base);
                     return Ok(format!("Git 已安装（内置）：{}", v));
                 }
             }
@@ -570,11 +586,14 @@ pub async fn install_git(
 
     #[cfg(windows)]
     {
-        let zip_path = resolve_bundled_zip_from_project(crate::mirror::MINGIT_ZIP)
+        let zip_path = resolve_bundled_zip_from_project(crate::mirror::PORTABLE_GIT_ZIP)
+            .or_else(|| resolve_bundled_zip(&app, crate::mirror::PORTABLE_GIT_ZIP))
+            .or_else(|| resolve_bundled_zip_from_project(crate::mirror::MINGIT_ZIP))
             .or_else(|| resolve_bundled_zip(&app, crate::mirror::MINGIT_ZIP))
             .ok_or_else(|| {
                 let hint = format!(
-                    "未找到内置 Git zip（{}），请确认安装包中 bundled-env/ 目录存在并包含该文件",
+                    "未找到内置 Git zip（优先 {}，回退 {}），请确认安装包中 bundled-env/ 目录存在并包含该文件",
+                    crate::mirror::PORTABLE_GIT_ZIP,
                     crate::mirror::MINGIT_ZIP
                 );
                 emit(&app, InstallProgressEvent::failed("git", &hint));
@@ -610,7 +629,14 @@ pub async fn install_git(
             .unwrap_or_else(|_| "unknown".to_string());
 
         if v_out != "unknown" {
+            #[cfg(windows)]
+            if !git_bash_exists(&env_dir) {
+                let msg = "Git 已解压但未找到 bash.exe（Hermes 必需）。请使用内置 PortableGit 包，而非 MinGit 精简包。".to_string();
+                emit(&app, InstallProgressEvent::failed("git", &msg));
+                return Err(msg);
+            }
             emit(&app, InstallProgressEvent::finished("git", &format!("Git 安装完成（{}）", v_out)));
+            persist_managed_tools(&base);
             Ok(format!("Git 安装成功（内置）：{}", v_out))
         } else {
             emit(&app, InstallProgressEvent::failed("git", "Git 解压后执行失败"));
@@ -643,7 +669,8 @@ pub async fn install_git(
 
             if v_out != "unknown" {
                 emit(&app, InstallProgressEvent::finished("git", &format!("Git 安装完成（{}）", v_out)));
-                return Ok(format!("Git 安装成功（内置）：{}", v_out));
+                persist_managed_tools(&base);
+                return Ok(format!("Git ?????????{}", v_out));
             }
         }
 

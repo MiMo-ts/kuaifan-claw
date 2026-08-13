@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const MANIFEST_FILE: &str = "bundle-manifest.json";
-const MANAGED_SKILL_NAME: &str = "kuaifan-image";
+const MANAGED_SKILL_NAMES: &[&str] = &["kuaifan-image", "kuaifan-video"];
 
 #[derive(Debug, Deserialize)]
 struct BundleManifest {
@@ -68,25 +68,7 @@ pub fn managed_skill_root(data_dir: &Path) -> PathBuf {
 
 pub fn ensure_managed_skill(resource_root: &Path, data_dir: &Path) -> Result<PathBuf, String> {
     let source_root = resource_root.join("bundled-skills");
-    let source_skill = source_root.join(MANAGED_SKILL_NAME);
-    if !source_skill.join("SKILL.md").is_file() {
-        return Err(format!("bundled Skill is missing: {}", source_skill.display()));
-    }
-    let source_manifest = read_manifest(&source_skill)?;
-
     let destination_root = managed_skill_root(data_dir);
-    let destination_skill = destination_root.join(MANAGED_SKILL_NAME);
-    let already_current = read_manifest(&destination_skill)
-        .map(|manifest| {
-            manifest.schema_version == source_manifest.schema_version
-                && manifest.revision == source_manifest.revision
-                && manifest.content_sha256 == source_manifest.content_sha256
-        })
-        .unwrap_or(false);
-    if already_current {
-        return Ok(destination_root);
-    }
-
     fs::create_dir_all(&destination_root).map_err(|error| {
         format!(
             "create managed Skill root {}: {}",
@@ -94,37 +76,56 @@ pub fn ensure_managed_skill(resource_root: &Path, data_dir: &Path) -> Result<Pat
             error
         )
     })?;
-    let stage = destination_root.join(format!(".{}-stage-{}", MANAGED_SKILL_NAME, std::process::id()));
-    let backup = destination_root.join(format!(".{}-previous-{}", MANAGED_SKILL_NAME, std::process::id()));
-    if stage.exists() {
-        fs::remove_dir_all(&stage)
-            .map_err(|error| format!("clear managed Skill staging directory {}: {}", stage.display(), error))?;
-    }
-    if backup.exists() {
-        fs::remove_dir_all(&backup)
-            .map_err(|error| format!("clear managed Skill backup directory {}: {}", backup.display(), error))?;
-    }
-
-    copy_dir_recursive(&source_skill, &stage)?;
-    read_manifest(&stage)?;
-    if destination_skill.exists() {
-        fs::rename(&destination_skill, &backup).map_err(|error| {
-            format!(
-                "stage managed Skill update from {}: {}",
-                destination_skill.display(),
-                error
-            )
-        })?;
-    }
-    if let Err(error) = fs::rename(&stage, &destination_skill) {
-        if backup.exists() {
-            let _ = fs::rename(&backup, &destination_skill);
+    for skill_name in MANAGED_SKILL_NAMES {
+        let source_skill = source_root.join(skill_name);
+        if !source_skill.join("SKILL.md").is_file() {
+            return Err(format!("bundled Skill is missing: {}", source_skill.display()));
         }
-        return Err(format!("promote managed Skill update: {}", error));
-    }
-    if backup.exists() {
-        fs::remove_dir_all(&backup)
-            .map_err(|error| format!("remove previous managed Skill {}: {}", backup.display(), error))?;
+        let source_manifest = read_manifest(&source_skill)?;
+        let destination_skill = destination_root.join(skill_name);
+        let already_current = read_manifest(&destination_skill)
+            .map(|manifest| {
+                manifest.schema_version == source_manifest.schema_version
+                    && manifest.revision == source_manifest.revision
+                    && manifest.content_sha256 == source_manifest.content_sha256
+            })
+            .unwrap_or(false);
+        if already_current {
+            continue;
+        }
+
+        let stage = destination_root.join(format!(".{}-stage-{}", skill_name, std::process::id()));
+        let backup = destination_root.join(format!(".{}-previous-{}", skill_name, std::process::id()));
+        if stage.exists() {
+            fs::remove_dir_all(&stage)
+                .map_err(|error| format!("clear managed Skill staging directory {}: {}", stage.display(), error))?;
+        }
+        if backup.exists() {
+            fs::remove_dir_all(&backup)
+                .map_err(|error| format!("clear managed Skill backup directory {}: {}", backup.display(), error))?;
+        }
+
+        copy_dir_recursive(&source_skill, &stage)?;
+        read_manifest(&stage)?;
+        if destination_skill.exists() {
+            fs::rename(&destination_skill, &backup).map_err(|error| {
+                format!(
+                    "stage managed Skill update from {}: {}",
+                    destination_skill.display(),
+                    error
+                )
+            })?;
+        }
+        if let Err(error) = fs::rename(&stage, &destination_skill) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, &destination_skill);
+            }
+            return Err(format!("promote managed Skill update: {}", error));
+        }
+        if backup.exists() {
+            fs::remove_dir_all(&backup)
+                .map_err(|error| format!("remove previous managed Skill {}: {}", backup.display(), error))?;
+        }
     }
     Ok(destination_root)
 }
@@ -139,8 +140,12 @@ pub fn bundled_skills_resource_root() -> Result<PathBuf, String> {
     }
     candidates
         .into_iter()
-        .find(|candidate| candidate.join("bundled-skills").join(MANAGED_SKILL_NAME).is_dir())
-        .ok_or_else(|| "bundled kuaifan-image Skill resource is missing".to_string())
+        .find(|candidate| {
+            MANAGED_SKILL_NAMES.iter().all(|skill_name| {
+                candidate.join("bundled-skills").join(skill_name).is_dir()
+            })
+        })
+        .ok_or_else(|| "bundled managed Skill resources are missing".to_string())
 }
 
 pub fn bootstrap_managed_skill(data_dir: &Path) -> Result<PathBuf, String> {
@@ -220,19 +225,21 @@ mod tests {
     use std::path::Path;
 
     fn write_bundled_skill(resources: &Path, revision: &str) {
-        let skill_dir = resources.join("bundled-skills").join("kuaifan-image");
-        fs::create_dir_all(skill_dir.join("scripts")).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "---\nname: kuaifan-image\n---\n").unwrap();
-        fs::write(skill_dir.join("scripts").join("kuaifan_image.py"), "print('skill')\n").unwrap();
-        fs::write(
-            skill_dir.join("bundle-manifest.json"),
-            format!(
-                "{{\"schema_version\":1,\"revision\":\"{}\",\"content_sha256\":\"{}\"}}",
-                revision,
-                "0".repeat(64)
-            ),
-        )
-        .unwrap();
+        for skill_name in MANAGED_SKILL_NAMES {
+            let skill_dir = resources.join("bundled-skills").join(skill_name);
+            fs::create_dir_all(skill_dir.join("scripts")).unwrap();
+            fs::write(skill_dir.join("SKILL.md"), format!("---\nname: {}\n---\n", skill_name)).unwrap();
+            fs::write(skill_dir.join("scripts").join("skill.py"), "print('skill')\n").unwrap();
+            fs::write(
+                skill_dir.join("bundle-manifest.json"),
+                format!(
+                    "{{\"schema_version\":1,\"revision\":\"{}\",\"content_sha256\":\"{}\"}}",
+                    revision,
+                    "0".repeat(64)
+                ),
+            )
+            .unwrap();
+        }
     }
 
     #[test]
@@ -249,6 +256,7 @@ mod tests {
 
         assert_eq!(root, data.join("bundled-skills"));
         assert!(root.join("kuaifan-image").join("SKILL.md").is_file());
+        assert!(root.join("kuaifan-video").join("SKILL.md").is_file());
         assert_eq!(fs::read_to_string(user_skill).unwrap(), "user managed");
     }
 
@@ -286,5 +294,20 @@ mod tests {
         assert_eq!(external_dirs.len(), 1);
         assert_eq!(external_dirs[0].as_str(), Some("D:/data/bundled-skills"));
         assert!(hermes.contains_key(serde_yaml::Value::String("providers".into())));
+    }
+
+    #[test]
+    fn managed_skill_bootstrap_installs_every_managed_skill() {
+        let temp = tempfile::tempdir().unwrap();
+        let resources = temp.path().join("resources");
+        let data = temp.path().join("data");
+        write_bundled_skill(&resources, "2");
+
+        let root = ensure_managed_skill(&resources, &data).unwrap();
+
+        for skill_name in MANAGED_SKILL_NAMES {
+            assert!(root.join(skill_name).join("SKILL.md").is_file());
+            assert!(root.join(skill_name).join(MANIFEST_FILE).is_file());
+        }
     }
 }

@@ -8,6 +8,8 @@ use crate::services::cipher::CIPHER_PREFIX;
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashSet;
+
 use std::path::PathBuf;
 
 use tokio::fs::OpenOptions;
@@ -3237,6 +3239,51 @@ pub struct ModelEntry {
 
 }
 
+#[cfg(test)]
+mod kuaifan_model_catalog_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn keeps_the_authenticated_catalog_first_for_shared_model_requests() {
+        assert_eq!(
+            kuaifan_catalog_sources(Some("  kf-live-key  ")),
+            vec![KuaifanCatalogSource::Authenticated, KuaifanCatalogSource::Published]
+        );
+    }
+
+    #[test]
+    fn uses_the_published_catalog_for_the_codex_manager_only() {
+        assert_eq!(
+            codex_kuaifan_catalog_source(),
+            KuaifanCatalogSource::Published
+        );
+    }
+
+    #[test]
+    fn uses_the_published_catalog_before_a_key_is_configured() {
+        assert_eq!(
+            kuaifan_catalog_sources(None),
+            vec![KuaifanCatalogSource::Published]
+        );
+    }
+
+    #[test]
+    fn parses_published_models_from_the_pricing_payload() {
+        let models = parse_kuaifan_pricing_models(&json!({
+            "data": [
+                { "model_name": "gpt-5.6-terra", "model_price": 0.5, "model_ratio": 1, "supported_endpoint_types": ["openai"] },
+                { "model_name": "", "model_price": 0, "model_ratio": 0 }
+            ]
+        }))
+        .expect("pricing payload should provide models");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-5.6-terra");
+        assert_eq!(models[0].badge.as_deref(), Some("openai"));
+    }
+}
+
 
 
 fn me(
@@ -3504,23 +3551,76 @@ pub async fn list_models(
 
 
 
-/// KuaiFan model list fetched in real-time from https://kuaifanio.cn/api/pricing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KuaifanCatalogSource {
+    Authenticated,
+    Published,
+}
 
-async fn list_kuaifan_models(_api_key: Option<&str>) -> Result<Vec<ModelEntry>, String> {
-    match fetch_models_from_pricing_api().await {
-        Ok(models) if !models.is_empty() => {
-            tracing::info!("KuaiFan: {} models from /api/pricing", models.len());
-            Ok(models)
-        }
-        Ok(_) => {
-            tracing::info!("KuaiFan: /api/pricing returned empty model list");
-            Ok(Vec::new())
-        }
-        Err(e) => {
-            tracing::warn!("KuaiFan: /api/pricing fetch failed: {}", e);
-            Ok(Vec::new())
+fn kuaifan_catalog_sources(api_key: Option<&str>) -> Vec<KuaifanCatalogSource> {
+    if api_key.is_some_and(|key| !key.trim().is_empty()) {
+        vec![KuaifanCatalogSource::Authenticated, KuaifanCatalogSource::Published]
+    } else {
+        vec![KuaifanCatalogSource::Published]
+    }
+}
+
+fn codex_kuaifan_catalog_source() -> KuaifanCatalogSource {
+    KuaifanCatalogSource::Published
+}
+
+#[tauri::command]
+pub async fn list_codex_kuaifan_marketplace_models() -> Result<Vec<ModelEntry>, String> {
+    let models = match codex_kuaifan_catalog_source() {
+        KuaifanCatalogSource::Published => fetch_models_from_pricing_api().await?,
+        KuaifanCatalogSource::Authenticated => unreachable!("Codex model plaza never uses an account catalog"),
+    };
+
+    if models.is_empty() {
+        return Err("快泛模型广场没有返回可用模型，请稍后点击“获取模型”重试。".to_string());
+    }
+
+    tracing::info!("KuaiFan: {} models from Codex model plaza catalog", models.len());
+    Ok(models)
+}
+
+/// Shared model requests retain the account-scoped catalog when a key exists.
+async fn list_kuaifan_models(api_key: Option<&str>) -> Result<Vec<ModelEntry>, String> {
+    let api_key = api_key.map(str::trim).filter(|key| !key.is_empty());
+    let mut failures = Vec::new();
+
+    for source in kuaifan_catalog_sources(api_key) {
+        let result = match source {
+            KuaifanCatalogSource::Authenticated => {
+                fetch_models_from_kuaifan_api(api_key.expect("authenticated source requires an API key")).await
+            }
+            KuaifanCatalogSource::Published => fetch_models_from_pricing_api().await,
+        };
+
+        match result {
+            Ok(models) if !models.is_empty() => {
+                let catalog = match source {
+                    KuaifanCatalogSource::Authenticated => "authenticated",
+                    KuaifanCatalogSource::Published => "model plaza fallback",
+                };
+                tracing::info!("KuaiFan: {} models from {catalog} catalog", models.len());
+                return Ok(models);
+            }
+            Ok(_) => failures.push(match source {
+                KuaifanCatalogSource::Authenticated => "账号模型目录未返回可用模型".to_string(),
+                KuaifanCatalogSource::Published => "模型广场目录未返回可用模型".to_string(),
+            }),
+            Err(error) => failures.push(match source {
+                KuaifanCatalogSource::Authenticated => format!("账号模型目录失败：{error}"),
+                KuaifanCatalogSource::Published => format!("模型广场目录失败：{error}"),
+            }),
         }
     }
+
+    Err(format!(
+        "快泛模型广场获取失败：{}。请稍后点击“获取模型”重试。",
+        failures.join("；")
+    ))
 }
 
 /// Fetch published models from https://kuaifanio.cn/api/pricing (public endpoint)
@@ -3543,48 +3643,87 @@ pub async fn fetch_models_from_pricing_api() -> Result<Vec<ModelEntry>, String> 
 
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("JSON: {}", e))?;
 
+    parse_kuaifan_pricing_models(&body)
+}
+
+async fn fetch_models_from_kuaifan_api(api_key: &str) -> Result<Vec<ModelEntry>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("创建快泛 HTTP 客户端失败: {error}"))?;
+    let response = client
+        .get("https://kuaifanio.cn/v1/models")
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|error| format!("请求快泛 /v1/models 失败: {error}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("快泛 /v1/models 返回 HTTP {}", response.status()));
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("解析快泛 /v1/models 响应失败: {error}"))?;
+    parse_kuaifan_pricing_models(&body)
+}
+
+fn parse_kuaifan_pricing_models(body: &serde_json::Value) -> Result<Vec<ModelEntry>, String> {
     let data = body
         .get("data")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "No 'data' array in response".to_string())?;
-
-    let models: Vec<ModelEntry> = data
+        .or_else(|| body.get("models"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "快泛模型响应缺少 data 数组".to_string())?;
+    let mut known_ids = HashSet::new();
+    let models = data
         .iter()
         .filter_map(|item| {
-            let id = item.get("model_name").and_then(|v| v.as_str())?;
-            if id.is_empty() {
+            let id = item
+                .get("model_name")
+                .or_else(|| item.get("id"))
+                .or_else(|| item.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)?;
+            if id.is_empty() || !known_ids.insert(id.to_string()) {
                 return None;
             }
             let is_free = match (
-                item.get("model_price").and_then(|v| v.as_f64()),
-                item.get("model_ratio").and_then(|v| v.as_f64()),
+                item.get("model_price").and_then(serde_json::Value::as_f64),
+                item.get("model_ratio").and_then(serde_json::Value::as_f64),
             ) {
                 (Some(price), Some(ratio)) => price == 0.0 && ratio == 0.0,
                 _ => false,
             };
             let badge = item
                 .get("supported_endpoint_types")
-                .and_then(|v| v.as_array())
+                .and_then(serde_json::Value::as_array)
                 .map(|types| {
                     types
                         .iter()
-                        .filter_map(|t| t.as_str())
+                        .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                         .join(",")
                 })
-                .filter(|s| !s.is_empty());
+                .filter(|value| !value.is_empty());
             Some(ModelEntry {
                 id: id.to_string(),
-                name: id.to_string(),
+                name: item
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(id)
+                    .to_string(),
                 context_window: None,
                 is_free,
                 badge,
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     if models.is_empty() {
-        Err("No published models found in /api/pricing".into())
+        Err("快泛模型响应中没有有效模型".to_string())
     } else {
         Ok(models)
     }

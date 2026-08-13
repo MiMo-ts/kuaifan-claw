@@ -1,12 +1,10 @@
 [package]
 name = "快泛claw"
-version = "1.0.70"
+version = "1.0.128"
 description = "快泛claw - 一站式安装与管理系统"
 authors = ["快泛科技"]
 edition = "2021"
 
-# 默认启用 Tauri 内置资源协议（custom-protocol），否则 `cargo build --release` 会一直走 devUrl（localhost:5173），
-# 未开 Vite 时出现 ERR_CONNECTION_REFUSED。开发时用 `tauri dev -- --no-default-features` 关闭本 feature，走 Vite。
 [features]
 default = ["tauri-custom-protocol"]
 tauri-custom-protocol = ["tauri/custom-protocol"]
@@ -16,13 +14,12 @@ tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
 tauri = { version = "2.1", features = ["tray-icon", "custom-protocol"] }
-# 防止多开：每多一个进程就多一个托盘图标（关窗仅隐藏时尤甚）
-tauri-plugin-single-instance = "2"
 tauri-plugin-shell = "2.0"
 tauri-plugin-process = "2.0"
 tauri-plugin-fs = "2.0"
 tauri-plugin-dialog = "2.0"
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.41", features = ["full"] }
@@ -49,6 +46,7 @@ tar = "0.4"
 hostname = "0.4"
 num_cpus = "1.16"
 serde_yaml = "0.9"
+toml_edit = "0.22"
 urlencoding = "2.1"
 uuid = { version = "1.0", features = ["v4"] }
 aes-gcm = "0.10"
@@ -61,6 +59,5 @@ qrcode = { version = "0.14", default-features = false, features = ["image"] }
 [dev-dependencies]
 tempfile = "3.14"
 
-# 修复 macOS 上的 webview_version 崩溃问题
 [patch.crates-io]
 tauri-runtime-wry = { path = "patches/tauri-runtime-wry" }

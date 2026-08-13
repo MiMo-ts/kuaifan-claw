@@ -186,6 +186,21 @@ fn main() {
             1024 * 1024,
             "OpenClaw npm 包 (openclaw.tgz)",
         ));
+        actual_bundles.push((
+            "bundled-codex/codex-plus-plus.exe",
+            10 * 1024 * 1024,
+            "Codex++ runtime",
+        ));
+        actual_bundles.push((
+            "bundled-codex/ChatGPT Installer.exe",
+            1024 * 1024,
+            "ChatGPT installer",
+        ));
+        actual_bundles.push((
+            "bundled-codex/Microsoft.Services.Store.winmd",
+            1024,
+            "Codex++ Windows Store metadata",
+        ));
 
         for (rel_path, min_bytes, desc) in actual_bundles {
             let full = if rel_path.contains('/') {

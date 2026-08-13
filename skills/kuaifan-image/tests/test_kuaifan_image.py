@@ -1,5 +1,6 @@
 import importlib.util
 import inspect
+import hashlib
 import json
 import os
 import pathlib
@@ -13,6 +14,7 @@ from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "kuaifan_image.py"
+BUNDLED_SKILL_ROOT = ROOT.parents[1] / "src-tauri" / "resources" / "bundled-skills" / "kuaifan-image"
 
 
 def load_module():
@@ -99,6 +101,26 @@ class ProviderResolutionTests(unittest.TestCase):
             )
         self.assertEqual(module.resolve_provider(config, None)["api_key"], "hermes-key")
 
+    def test_load_model_config_reads_hermes_home_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                "providers:\n"
+                "  kuaifan:\n"
+                "    api: https://kuaifanio.cn/v1\n"
+                "    api_key: hermes-home-key\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"HERMES_HOME": str(root), "LOCALAPPDATA": ""},
+                clear=False,
+            ), mock.patch.object(module.pathlib.Path, "home", return_value=root / "home"):
+                config = module.load_model_config(runtime="hermes")
+
+        self.assertEqual(module.resolve_provider(config, None)["api_key"], "hermes-home-key")
+
 
 class ImageRequestTests(unittest.TestCase):
     def test_text_request_uses_generations_with_n_one(self):
@@ -109,20 +131,39 @@ class ImageRequestTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://kuaifanio.cn/v1/images/generations")
         self.assertEqual(json.loads(request.data.decode("utf-8"))["n"], 1)
 
-    def test_edit_request_uses_multipart_edits_endpoint(self):
+    def test_edit_request_uses_json_data_urls_at_the_edits_endpoint(self):
         self.assertTrue(hasattr(module, "build_edit_request"), "edit request builder must exist")
         request = module.build_edit_request(
             "https://kuaifanio.cn/v1",
             "model",
             "edit",
             "1024x1024",
-            [("source.png", b"png")],
+            [("source.png", b"\x89PNG\r\n\x1a\nimage")],
         )
         self.assertEqual(request.full_url, "https://kuaifanio.cn/v1/images/edits")
-        self.assertIn("multipart/form-data", request.get_header("Content-type"))
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["model"], "model")
+        self.assertEqual(payload["prompt"], "edit")
+        self.assertEqual(payload["size"], "1024x1024")
+        self.assertEqual(payload["n"], 1)
+        self.assertEqual(payload["image"], ["data:image/png;base64,iVBORw0KGgppbWFnZQ=="])
 
 
 class SkillPackageTests(unittest.TestCase):
+    def test_bundled_client_matches_the_source_and_manifest(self):
+        bundled_script = BUNDLED_SKILL_ROOT / "scripts" / "kuaifan_image.py"
+        manifest = json.loads((BUNDLED_SKILL_ROOT / "bundle-manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            bundled_script.read_text(encoding="utf-8"),
+            SCRIPT.read_text(encoding="utf-8"),
+        )
+        self.assertEqual(
+            manifest["content_sha256"],
+            hashlib.sha256(bundled_script.read_bytes()).hexdigest().upper(),
+        )
+
     def test_skill_document_declares_no_secret_and_explicit_trigger(self):
         document = ROOT / "SKILL.md"
         self.assertTrue(document.is_file(), "SKILL.md must exist")
@@ -130,6 +171,27 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("KUAIFAN_API_KEY", text)
         self.assertIn("/生图", text)
         self.assertNotIn("sk-", text)
+
+    def test_skill_document_maps_doubao_drawing_requests_to_kuaifan_image(self):
+        source = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        bundled = (BUNDLED_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for trigger in ["豆包", "使用豆包", "请使用豆包帮我生成", "生图", "图纸"]:
+            self.assertIn(trigger, source)
+        self.assertEqual(bundled, source)
+
+    def test_skill_document_requires_shell_safe_absolute_script_invocation(self):
+        source = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        bundled = (BUNDLED_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for document in [source, bundled]:
+            self.assertIn('python "<SKILL_DIR>\\scripts\\kuaifan_image.py"', document)
+            self.assertIn("Do not change directories or chain shell commands", document)
+            self.assertNotIn("cd /d", document)
+            self.assertNotIn("&&", document)
+            self.assertNotIn("python scripts/kuaifan_image.py", document)
+
+        self.assertEqual(bundled, source)
 
     def test_dry_run_reads_config_without_printing_its_key(self):
         config = {
@@ -182,11 +244,20 @@ class ImageResponseTests(unittest.TestCase):
         with self.assertRaises(module.KuaifanImageError):
             module.image_bytes_from_response(payload, 1)
 
+    def test_save_image_uses_jpeg_extension_for_jpeg_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = module.save_image(
+                str(pathlib.Path(directory) / "generated.png"),
+                b"\xff\xd8\xff\xe0jpeg-bytes",
+            )
+
+        self.assertTrue(image_path.endswith(".jpg"))
+
 
 class ScriptOutputContractTests(unittest.TestCase):
     """Lock the on-the-wire JSON shape the runtime adapters depend on."""
 
-    def test_main_emits_media_marker_for_successful_response(self):
+    def test_main_emits_one_media_directive_for_an_openclaw_response(self):
         # Invoke main() in-process with a stubbed urlopen so the script path is
         # exercised end-to-end (no subprocess). Asserts the success result has
         # every field the channel adapter needs.
@@ -232,14 +303,54 @@ class ScriptOutputContractTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "text_to_image")
         self.assertTrue(payload["image_path"].endswith(".png"))
         self.assertTrue(payload["absolute_path"].endswith(".png"))
-        self.assertTrue(payload["media_marker"].startswith("MEDIA:"))
-        self.assertTrue(payload["media_marker"].endswith(".png"))
-        self.assertEqual(output_lines[-1], payload["media_marker"])
+        self.assertNotIn("media_marker", payload)
+        self.assertEqual(sum(line.count("MEDIA:") for line in output_lines), 1)
+        self.assertTrue(output_lines[-1].startswith("MEDIA:"))
+        self.assertTrue(output_lines[-1].endswith(".png"))
         self.assertEqual(payload["request_id"], "req-id-1")
         self.assertIsNone(payload["image_url"])
         # absolute_path and image_path both point at the requested output file.
         # The actual write goes through save_image, covered by the dry-run test path
         # and the manual integration check at the end of SKILL.md.
+
+    def test_main_records_an_export_directory_without_writing_there(self):
+        import base64
+        import io
+
+        fake_png_bytes = b"\x89PNG\r\n\x1a\nfake-bytes"
+        fake_png = base64.b64encode(fake_png_bytes).decode("ascii")
+        fake_response = mock.MagicMock()
+        fake_response.read.return_value = json.dumps({"data": [{"b64_json": fake_png}]}).encode("utf-8")
+        fake_response.headers.get.return_value = "req-id-export"
+        fake_response.__enter__.return_value = fake_response
+        fake_response.__exit__.return_value = False
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            config_path = root / "oc.json"
+            export_dir = root / "requested-export"
+            config_path.write_text(
+                json.dumps({"models": {"providers": {"openai": {"apiKey": "k", "baseUrl": "https://kuaifanio.cn/v1"}}}}),
+                encoding="utf-8",
+            )
+            argv = [
+                "kuaifan_image.py", "--config", str(config_path), "--runtime", "hermes",
+                "--prompt", "hello", "--export-dir", str(export_dir),
+            ]
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"HERMES_HOME": str(root / "hermes")}, clear=False), \
+                 mock.patch.object(module, "urlopen", return_value=fake_response), \
+                 mock.patch.object(sys, "argv", argv), \
+                 mock.patch.object(sys.stdout, "write", stdout.write):
+                rc = module.main()
+
+        self.assertEqual(rc, 0)
+        output = stdout.getvalue()
+        payload = json.loads(output.splitlines()[0])
+        self.assertEqual(payload["export_dir"], str(export_dir.resolve()))
+        self.assertNotIn("media_marker", payload)
+        self.assertNotIn("MEDIA:", output)
+        self.assertFalse(export_dir.exists(), "the Skill must not write a user directory directly")
 
     def test_main_reports_a_retryable_upstream_503_without_exposing_the_key(self):
         import io
@@ -259,6 +370,7 @@ class ScriptOutputContractTests(unittest.TestCase):
             )
             argv = [
                 "kuaifan_image.py",
+                "--runtime", "openclaw",
                 "--config", str(config_path),
                 "--prompt", "hello",
                 "--retries", "0",

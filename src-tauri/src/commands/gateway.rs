@@ -4,7 +4,7 @@ use crate::commands::hidden_cmd;
 use crate::commands::log::OPENCLAW_GATEWAY_LOG;
 use crate::commands::robot::get_robot_system_prompt;
 use crate::bundled_env::OPENCLAW_DATA_DIR_NAME;
-use crate::env_paths::{resolve_node, resolve_git};
+use crate::env_paths::{build_deps_env_path, resolve_node};
 use crate::models::GatewayStatus;
 use crate::services::cipher::{decrypt_credential, CIPHER_PREFIX};
 use serde_json::json;
@@ -13,11 +13,21 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
 
 /// 与 OpenClaw 包内默认网关端口一致（app.yaml 未写 port 时的回退）
 const FALLBACK_GATEWAY_PORT: u16 = 18789;
+
+static GATEWAY_START_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+fn try_acquire_gateway_start() -> Result<tokio::sync::MutexGuard<'static, ()>, String> {
+    GATEWAY_START_GUARD
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .try_lock()
+        .map_err(|_| "OpenClaw 网关正在启动，请等待当前启动完成".to_string())
+}
 
 #[cfg(test)]
 mod official_package_tests {
@@ -2385,6 +2395,18 @@ prune_stale_skills_extra_dirs(&mut base, data_dir);
         }
     }
 
+    if let Some(upstream_base_url) = crate::commands::kuaifan_stream_proxy::configured_kuaifan_base_url(&base) {
+        let proxy_base_url = crate::commands::kuaifan_stream_proxy::start(&upstream_base_url)?;
+        crate::commands::kuaifan_stream_proxy::configure_kuaifan_provider(
+            &mut base,
+            &proxy_base_url,
+        );
+        info!(
+            "Kuaifan chat stream normalization enabled: upstream={} proxy={}",
+            upstream_base_url, proxy_base_url
+        );
+    }
+
     let pretty = serde_json::to_string_pretty(&base)
         .map_err(|e| format!("序列化 openclaw.json 失败: {}", e))?;
     // OpenOptions + sync_all 确保写入原子性和数据落盘
@@ -3727,6 +3749,7 @@ pub async fn get_gateway_status(
 
 /// 供 `start_gateway` 与「仅路径」场景复用（例如新建微信实例后需在无 `State` 时重启网关）。
 pub async fn start_gateway_with_data_dir_path(data_dir: &str) -> Result<String, String> {
+    let _start_guard = try_acquire_gateway_start()?;
     let openclaw_dir = format!("{}/{}", data_dir, OPENCLAW_DATA_DIR_NAME);
 
     if !Path::new(&openclaw_dir).exists() {
@@ -3878,6 +3901,24 @@ pub async fn start_gateway(data_dir: tauri::State<'_, crate::AppState>) -> Resul
     start_gateway_with_data_dir_path(&data_dir).await
 }
 
+#[cfg(test)]
+mod gateway_start_guard_tests {
+    use super::try_acquire_gateway_start;
+
+    #[test]
+    fn rejects_overlapping_gateway_start_attempts() {
+        let first = try_acquire_gateway_start().expect("first start owns the guard");
+        let second = try_acquire_gateway_start().expect_err("overlapping start must be rejected");
+        assert!(second.contains("正在启动"), "unexpected error: {second}");
+
+        drop(first);
+        assert!(
+            try_acquire_gateway_start().is_ok(),
+            "the guard must be reusable after the active start finishes"
+        );
+    }
+}
+
 /// 直接运行官方 OpenClaw CLI 的 `gateway run` 子命令。
 fn spawn_gateway_process(
     openclaw_dir: &str,
@@ -3904,27 +3945,9 @@ fn spawn_gateway_process(
             ));
         }
 
-        let system_path = std::env::var("PATH").unwrap_or_default();
-        let (git_exe_path, git_is_system) = resolve_git(data_dir);
-
-        // 只有使用内置 node/git 时才 prepend 其目录
-        let new_path = if is_system {
-            system_path
-        } else {
-            let node_parent = node_exe
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let git_prepend = if git_is_system || !git_exe_path.exists() {
-                String::new()
-            } else {
-                git_exe_path
-                    .parent()
-                    .map(|p| format!("{};", p.to_string_lossy()))
-                    .unwrap_or_default()
-            };
-            format!("{}{}{}", git_prepend, node_parent, system_path)
-        };
+        // Always inject managed Node / MinGit(bash) / Hermes Python so agent tools
+        // can resolve `python`/`git`/`bash` even when system PATH is incomplete.
+        let new_path = build_deps_env_path(data_dir);
 
         let mut cmd = hidden_cmd::hidden_command(&node_exe);
         let gw_http_port = resolve_gateway_http_port(data_dir);
@@ -4006,7 +4029,8 @@ pub async fn open_openclaw_console(
     let port = resolve_gateway_http_port(&data_dir);
     let token = resolve_gateway_ws_token(&data_dir);
     let token_trim = token.trim();
-    let base = format!("http://127.0.0.1:{}/control-ui", port);
+    let proxy_port = crate::commands::control_ui_proxy::start(&data_dir, port)?;
+    let base = format!("http://127.0.0.1:{}/", proxy_port);
     // 与 `openclaw dashboard` 一致：Control UI 需带 `?token=` 才会把令牌写入 localStorage 并完成 WS 握手，
     // 否则浏览器直接打开裸 URL 会报 1008 gateway token missing。
     let open_url = if token_trim.len() >= 16 {

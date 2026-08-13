@@ -1,0 +1,16 @@
+{
+  "time": "2026-07-24T12:25:46",
+  "bundled_codex_size": 15946752,
+  "bundled_mtime": "2026-07-24T10:59:43",
+  "markers": {
+    "diag_20260724_zh_locale": true,
+    "statsig_118392242": true,
+    "flat_setting_body": true,
+    "forceChineseLocale": true
+  },
+  "runtime_isolation": {
+    "no_D_Codex_fallback": true,
+    "force_lang_zh_CN": true,
+    "force_on_save_and_launch": true
+  }
+}

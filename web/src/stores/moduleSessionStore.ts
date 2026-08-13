@@ -10,8 +10,8 @@ import {
 type SessionMap = Record<ModuleId, ModuleSession[]>;
 type ActiveSessionMap = Record<ModuleId, string | null>;
 
-const emptySessions = (): SessionMap => ({ openclaw: [], hermes: [], codex: [], claude: [] });
-const emptyActiveSessions = (): ActiveSessionMap => ({ openclaw: null, hermes: null, codex: null, claude: null });
+const emptySessions = (): SessionMap => ({ openclaw: [], hermes: [], codex: [], claude: [], infinite_canvas: [] });
+const emptyActiveSessions = (): ActiveSessionMap => ({ openclaw: null, hermes: null, codex: null, claude: null, infinite_canvas: null });
 
 const STORE_VERSION = 2;
 const STORAGE_NAME = "openclaw-cn-manager-sessions";

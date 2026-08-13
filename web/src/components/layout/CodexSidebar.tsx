@@ -148,6 +148,11 @@ interface CodexSidebarProps {
 }
 
 export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: CodexSidebarProps) {
+  const [appVersion, setAppVersion] = useState("1.0.103");
+  useEffect(() => {
+    invoke<string>("get_app_version").then(setAppVersion).catch(() => undefined);
+  }, []);
+
   const navigate = useNavigate();
   const location = useLocation();
   const activeModule = useAppStore((s) => s.activeModule);
@@ -320,7 +325,7 @@ export default function CodexSidebar({ activeKey, onNavigate, gatewayRunning }: 
               快泛 Claw
             </span>
             <span className="text-[9.5px] font-mono" style={{ color: "var(--cx-text-dim)", letterSpacing: "0.04em" }}>
-              v1.0.53
+              {`v${appVersion}`}
             </span>
           </div>
         </button>

@@ -34,7 +34,7 @@ const MODULES = [
     description: "Codex CLI 智能编码助手",
     icon: CxIconTerminal,
     accent: "#3f8a55",
-    available: false,
+    available: true,
   },
   {
     key: "claude" as const,
@@ -43,6 +43,14 @@ const MODULES = [
     icon: CxIconDatabase,
     accent: "#a45f4a",
     available: false,
+  },
+  {
+    key: "infinite_canvas" as const,
+    title: "画布与视频",
+    description: "LLM / 生图 / 生视频一体化画布",
+    icon: CxIconDatabase,
+    accent: "#6b5cff",
+    available: true,
   },
 ];
 
@@ -76,6 +84,16 @@ export default function ModuleCardsModal({ onClose }: { onClose: () => void }) {
       const r = await invoke<{ installed: boolean }>("check_hermes_bundled");
       installed.hermes = r?.installed ?? false;
     } catch { installed.hermes = false; }
+    // Codex: check the ChatGPT desktop application status
+    try {
+      const codexStatus = await invoke<{ installed: boolean }>("get_codex_install_status");
+      installed.codex = codexStatus?.installed ?? false;
+    } catch { installed.codex = false; }
+    // Infinite Canvas
+    try {
+      const canvasStatus = await invoke<{ installed: boolean }>("check_infinite_canvas_bundled");
+      installed.infinite_canvas = canvasStatus?.installed ?? false;
+    } catch { installed.infinite_canvas = false; }
     setInstalledMap(installed);
   }, []);
 
@@ -94,6 +112,12 @@ export default function ModuleCardsModal({ onClose }: { onClose: () => void }) {
       } else if (module.key === "hermes") {
         const r = await invoke<{ installed: boolean }>("check_hermes_bundled");
         freshInstalled = r?.installed ?? false;
+      } else if (module.key === "codex") {
+        const r = await invoke<{ installed: boolean }>("get_codex_install_status");
+        freshInstalled = r?.installed ?? false;
+      } else if (module.key === "infinite_canvas") {
+        const r = await invoke<{ installed: boolean }>("check_infinite_canvas_bundled");
+        freshInstalled = r?.installed ?? false;
       }
     } catch { /* noop */ }
     setChecking((prev) => ({ ...prev, [module.key]: false }));
@@ -104,7 +128,7 @@ export default function ModuleCardsModal({ onClose }: { onClose: () => void }) {
     // 切换模块
     setActiveModule(module.key);
 
-    // 未安装 → 跳转安装向导；已安装 → 回到首页
+    // 已安装 -> 首页；未安装 -> 安装向导（与其他模块一致）
     if (freshInstalled) {
       navigate("/home");
     } else {

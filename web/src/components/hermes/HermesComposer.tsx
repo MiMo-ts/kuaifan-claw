@@ -9,6 +9,8 @@ export interface HermesComposerProps {
   onUpload: (files: File[], onProgress: (file: File, progress: number) => void) => Promise<HermesAttachment[]>;
   onCancel?: () => void;
   busy?: boolean;
+  /** When true, composer stays usable while busy (native Hermes interrupt/clarify). */
+  allowSendWhileBusy?: boolean;
   disabled?: boolean;
   placeholder?: string;
   initialText?: string;
@@ -21,6 +23,7 @@ export const HermesComposer: React.FC<HermesComposerProps> = ({
   onUpload,
   onCancel,
   busy = false,
+  allowSendWhileBusy = false,
   disabled = false,
   placeholder = "输入消息，Enter 发送，Shift + Enter 换行",
   initialText = "",
@@ -100,7 +103,8 @@ export const HermesComposer: React.FC<HermesComposerProps> = ({
 
   const send = useCallback(async () => {
     const value = text.trim();
-    if ((!value && attachments.length === 0) || busy || disabled || attachmentSendState(attachments) !== "ready") return;
+    const blockedByBusy = busy && !allowSendWhileBusy;
+    if ((!value && attachments.length === 0) || blockedByBusy || disabled || attachmentSendState(attachments) !== "ready") return;
     await onSend(value, attachments);
     setText("");
     attachments.forEach((attachment) => {
@@ -108,10 +112,13 @@ export const HermesComposer: React.FC<HermesComposerProps> = ({
       objectUrlsRef.current.delete(attachment.previewUrl);
     });
     setAttachments([]);
-  }, [attachments, busy, disabled, onSend, text]);
+  }, [allowSendWhileBusy, attachments, busy, disabled, onSend, text]);
 
   const sendState = attachmentSendState(attachments);
-  const canSend = (Boolean(text.trim()) || attachments.length > 0) && !disabled && !busy && sendState === "ready";
+  const canSend = (Boolean(text.trim()) || attachments.length > 0)
+    && !disabled
+    && (!busy || allowSendWhileBusy)
+    && sendState === "ready";
 
   return (
     <div
@@ -206,29 +213,32 @@ export const HermesComposer: React.FC<HermesComposerProps> = ({
               {sendState === "uploading" ? <span className="text-[10px]" style={{ color: "var(--cx-warn)" }}>正在上传附件</span> : null}
               {sendState === "error" ? <span className="text-[10px]" style={{ color: "var(--cx-error)" }}>移除失败附件后可发送</span> : null}
             </div>
-            {busy && onCancel ? (
-              <button
-                type="button"
-                onClick={onCancel}
-                className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium"
-                style={{ background: "var(--cx-error-soft)", color: "var(--cx-error)" }}
-              >
-                <CxIconStop className="h-3 w-3" />停止
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void send()}
-                disabled={!canSend}
-                className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium disabled:cursor-not-allowed disabled:opacity-40"
-                style={{
-                  background: canSend ? "var(--cx-accent)" : "var(--cx-bg-soft)",
-                  color: canSend ? "#fff" : "var(--cx-text-dim)",
-                }}
-              >
-                <CxIconSend className="h-3 w-3" />发送
-              </button>
-            )}
+            <div className="flex items-center gap-1.5">
+              {busy && onCancel ? (
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium"
+                  style={{ background: "var(--cx-error-soft)", color: "var(--cx-error)" }}
+                >
+                  <CxIconStop className="h-3 w-3" />停止
+                </button>
+              ) : null}
+              {(!busy || allowSendWhileBusy) ? (
+                <button
+                  type="button"
+                  onClick={() => void send()}
+                  disabled={!canSend}
+                  className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{
+                    background: canSend ? "var(--cx-accent)" : "var(--cx-bg-soft)",
+                    color: canSend ? "#fff" : "var(--cx-text-dim)",
+                  }}
+                >
+                  <CxIconSend className="h-3 w-3" />发送
+                </button>
+              ) : null}
+            </div>
           </div>
           {dragging ? <div className="pointer-events-none absolute inset-0 flex items-center justify-center border-2 border-dashed text-[12px]" style={{ borderColor: "var(--cx-accent)", color: "var(--cx-accent)", background: "var(--cx-bg-elev)" }}>松开以添加附件</div> : null}
         </div>

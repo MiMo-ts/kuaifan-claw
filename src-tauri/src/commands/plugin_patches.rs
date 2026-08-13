@@ -955,7 +955,7 @@ mod tests {
         fs::write(&p, "hello world
 ").unwrap();
 
-        let first = ensure_once(&p, "// MARKER", "world", "rust").unwrap();
+        let first = ensure_once(&p, "// MARKER", "world", "// MARKER\nrust").unwrap();
         assert!(first);
         assert!(fs::read_to_string(&p).unwrap().contains("// MARKER"));
 

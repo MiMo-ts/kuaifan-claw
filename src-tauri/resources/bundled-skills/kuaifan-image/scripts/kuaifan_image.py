@@ -110,31 +110,11 @@ def build_text_request(base_url: str, model: str, prompt: str, size: str) -> Req
     )
 
 
-def encode_multipart(fields: dict[str, str], images: list[tuple[str, bytes]]) -> tuple[bytes, str]:
-    """Return a multipart body compatible with OpenAI-style image edit APIs."""
-    boundary = f"----KuaifanImage{uuid.uuid4().hex}"
-    chunks: list[bytes] = []
-    for name, value in fields.items():
-        chunks.extend(
-            [
-                f"--{boundary}\r\n".encode("ascii"),
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"),
-                value.encode("utf-8"),
-                b"\r\n",
-            ]
-        )
-    for filename, data in images:
-        chunks.extend(
-            [
-                f"--{boundary}\r\n".encode("ascii"),
-                f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'.encode("utf-8"),
-                b"Content-Type: application/octet-stream\r\n\r\n",
-                data,
-                b"\r\n",
-            ]
-        )
-    chunks.append(f"--{boundary}--\r\n".encode("ascii"))
-    return b"".join(chunks), boundary
+def image_data_url(filename: str, data: bytes) -> str:
+    """Encode one reference image for Kuaifan's JSON image-edit contract."""
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{media_type};base64,{encoded}"
 
 
 def build_edit_request(
@@ -147,13 +127,20 @@ def build_edit_request(
     """Build the OpenAI-compatible image-to-image request with one output."""
     if not images:
         raise KuaifanImageError("图生图至少需要一张参考图。")
-    body, boundary = encode_multipart(
-        {"model": model, "prompt": prompt, "n": "1", "size": size}, images
-    )
+    payload = json.dumps(
+        {
+            "model": model,
+            "prompt": prompt,
+            "image": [image_data_url(filename, data) for filename, data in images],
+            "n": 1,
+            "size": size,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
     return Request(
         f"{base_url.rstrip('/')}/images/edits",
-        data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        data=payload,
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
 
@@ -188,6 +175,9 @@ def hermes_config_paths(config_path: str | None) -> list[pathlib.Path]:
     if config_path:
         return [pathlib.Path(config_path).expanduser()]
     paths: list[pathlib.Path] = []
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        paths.append(pathlib.Path(hermes_home).expanduser() / "config.yaml")
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         paths.append(pathlib.Path(local_app_data) / "hermes" / "config.yaml")
@@ -341,8 +331,24 @@ def image_bytes_from_response(payload: bytes, timeout: int) -> tuple[bytes, str 
         raise KuaifanImageError("无法下载快泛生成的图片。") from exc
 
 
+def image_file_extension(data: bytes) -> str | None:
+    """Return the media extension implied by a supported image signature."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
 def save_image(path_value: str, data: bytes) -> str:
     path = pathlib.Path(path_value).expanduser().resolve()
+    detected_extension = image_file_extension(data)
+    if detected_extension:
+        path = path.with_suffix(detected_extension)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return str(path)
@@ -386,6 +392,16 @@ def allocate_output_path(
     return candidate
 
 
+def normalize_export_dir(value: str | None) -> str | None:
+    """Return a suggested user export directory without writing to it."""
+    if not value:
+        return None
+    candidate = pathlib.Path(value).expanduser()
+    if not candidate.is_absolute():
+        raise KuaifanImageError("保存目录必须使用绝对路径。")
+    return str(candidate.resolve())
+
+
 def build_media_marker(image_path):
     """Return the ``MEDIA:/absolute/path`` directive the agent gateway expects.
 
@@ -423,6 +439,7 @@ def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(description="Generate or edit an image through Kuaifan.")
     command.add_argument("--prompt", required=True)
     command.add_argument("--output")
+    command.add_argument("--export-dir")
     command.add_argument("--source", action="append", default=[])
     command.add_argument("--model", default="doubao-seedream-5-0-pro-260628")
     command.add_argument("--size", default="1024x1024")
@@ -466,28 +483,26 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         output_path = allocate_output_path(args.output, args.runtime, args.config)
+        export_dir = normalize_export_dir(args.export_dir)
         payload, request_id = send_request(
             apply_authorization(request, provider["api_key"]), args.timeout, max(0, args.retries)
         )
         image_data, _upstream_image_url = image_bytes_from_response(payload, args.timeout)
         image_path = save_image(str(output_path), image_data)
-        media_marker = build_media_marker(image_path)
-        absolute_path = (
-            media_marker.removeprefix("MEDIA:")
-            if media_marker
-            else str(pathlib.Path(image_path).expanduser().resolve())
-        )
+        emit_openclaw_media = args.runtime != "hermes"
+        media_marker = build_media_marker(image_path) if emit_openclaw_media else None
+        absolute_path = str(pathlib.Path(image_path).expanduser().resolve())
         result = {
             "artifact": "kuaifan-image/v1",
             "mode": mode,
             "image_path": image_path,
             "absolute_path": absolute_path,
             "image_url": None,
-            "media_marker": media_marker,
+            "export_dir": export_dir,
             "request_id": request_id,
         }
         print(json.dumps(result, ensure_ascii=False))
-        if media_marker:
+        if emit_openclaw_media and media_marker:
             print(media_marker)
         return 0
     except KuaifanImageError as exc:

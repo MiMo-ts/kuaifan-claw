@@ -15,10 +15,13 @@ use std::os::windows::process::CommandExt;
 /// Windows: CREATE_NO_WINDOW flag to prevent CMD popup
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x08000000;
+/// Windows: DETACHED_PROCESS - avoid inheriting/attaching a console
+#[cfg(windows)]
+const DETACHED_PROCESS: u32 = 0x00000008;
 
 const HERMES_DESKTOP_SESSION_TOKEN: &str = "kfc-desk-3463b6e3f34d0f12fc416939e9a81fc395f40f4730cfc145";
 const HERMES_BROWSER_BUNDLE_VERSION: &str = "3";
-const HERMES_AGENT_VERSION: &str = "0.18.2-kfc.4";
+const HERMES_AGENT_VERSION: &str = "0.18.2-kfc.6";
 
 fn hermes_agent_bundle_marker() -> String {
     format!("{}|kuaifanclaw-{}", HERMES_AGENT_VERSION, env!("CARGO_PKG_VERSION"))
@@ -62,13 +65,106 @@ fn hermes_browser_home_is_ready(home: &std::path::Path) -> bool {
         && hermes_browser_executable_path(home).is_some()
 }
 
+
+fn ensure_hermes_git_bash(data_base: &str) -> Result<PathBuf, String> {
+    if let Some(path) = resolve_git_bash(data_base) {
+        return Ok(path);
+    }
+
+    #[cfg(windows)]
+    {
+        match install_portable_git_with_bash(data_base) {
+            Ok(path) => {
+                info!("installed PortableGit with bash for Hermes: {}", path.display());
+                // Refresh process PATH so child tools can also see git/bash.
+                let _ = ensure_managed_tool_path(data_base);
+                return Ok(path);
+            }
+            Err(error) => {
+                warn!("auto-install PortableGit for Hermes failed: {}", error);
+            }
+        }
+    }
+
+    Err(
+        "未找到 Git Bash（bash.exe）。Hermes 终端工具依赖 Git for Windows / PortableGit，\
+MinGit 精简包不包含 bash。请在环境安装中重新安装 Git（内置 PortableGit），\
+或安装 Git for Windows 后重启 Hermes。"
+            .to_string(),
+    )
+}
+
+#[cfg(windows)]
+fn portable_git_zip_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join("bundled-env").join(crate::mirror::PORTABLE_GIT_ZIP));
+            out.push(dir.join("resources").join("bundled-env").join(crate::mirror::PORTABLE_GIT_ZIP));
+            out.push(dir.join("..").join("bundled-env").join(crate::mirror::PORTABLE_GIT_ZIP));
+        }
+    }
+    out.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bundled-env").join(crate::mirror::PORTABLE_GIT_ZIP));
+    out
+}
+
+#[cfg(windows)]
+fn install_portable_git_with_bash(data_base: &str) -> Result<PathBuf, String> {
+    let env_dir = env_root(data_base);
+    let dest = env_dir.join("git");
+    let zip_path = portable_git_zip_candidates()
+        .into_iter()
+        .find(|p| p.is_file())
+        .ok_or_else(|| {
+            format!(
+                "missing offline PortableGit package ({})",
+                crate::mirror::PORTABLE_GIT_ZIP
+            )
+        })?;
+
+    info!("extracting PortableGit for Hermes bash: {} -> {}", zip_path.display(), dest.display());
+    // Replace MinGit (no bash) with PortableGit (has bash).
+    if dest.exists() {
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+    std::fs::create_dir_all(&dest).map_err(|e| format!("create git dir failed: {e}"))?;
+
+    let data = std::fs::read(&zip_path).map_err(|e| format!("read PortableGit zip failed: {e}"))?;
+    let cursor = std::io::Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("open PortableGit zip failed: {e}"))?;
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("read PortableGit entry {i} failed: {e}"))?;
+        let out_path = dest.join(file.mangled_name());
+        if file.is_dir() {
+            std::fs::create_dir_all(&out_path)
+                .map_err(|e| format!("create {} failed: {e}", out_path.display()))?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {} failed: {e}", parent.display()))?;
+        }
+        let mut outfile = std::fs::File::create(&out_path)
+            .map_err(|e| format!("create {} failed: {e}", out_path.display()))?;
+        std::io::copy(&mut file, &mut outfile)
+            .map_err(|e| format!("extract {} failed: {e}", out_path.display()))?;
+    }
+
+    let bash = resolve_git_bash(data_base)
+        .ok_or_else(|| "PortableGit extracted but bash.exe still missing".to_string())?;
+    Ok(bash)
+}
+
 fn configure_hermes_browser_environment(
     command: &mut Command,
     hermes_home: &std::path::Path,
+    base_path: &str,
 ) -> Result<(), String> {
     let browser_bin_dir = hermes_home.join("node_modules").join(".bin");
     let node_dir = hermes_home.join("node");
-    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let existing_path = std::ffi::OsString::from(base_path);
     let path = std::env::join_paths(
         std::iter::once(node_dir)
             .chain(std::iter::once(browser_bin_dir))
@@ -250,9 +346,11 @@ fn hermes_default_model_api_key(data_dir: &str) -> Option<String> {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeGuiConfig {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "gui_type")]
     gui_type: String,
+    #[serde(alias = "url_template")]
     url_template: String,
+    #[serde(default, alias = "default_gui_port")]
     default_gui_port: u16,
 }
 
@@ -260,7 +358,11 @@ pub struct RuntimeGuiConfig {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct RuntimePortConfig {
     default: u16,
+    #[serde(default)]
     env: String,
+    /// 可选端口扫描上限（兼容旧 manifest 的 range 字段）
+    #[serde(default)]
+    range: Option<Vec<u16>>,
 }
 
 /// 运行时配置
@@ -327,20 +429,20 @@ struct RuntimePythonRequirement {
 #[derive(Clone, serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeInstance {
-    id: String,
-    name: String,
-    description: String,
-    version: String,
-    icon: String,
-    category: String,
-    capabilities: Vec<String>,
-    gui_type: String,
-    gui_url: String,
-    gui_port: u16,
-    gateway_port: u16,
-    running: bool,
-    pid: Option<u32>,
-    started_at: Option<u64>,
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub icon: String,
+    pub category: String,
+    pub capabilities: Vec<String>,
+    pub gui_type: String,
+    pub gui_url: String,
+    pub gui_port: u16,
+    pub gateway_port: u16,
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub started_at: Option<u64>,
 }
 
 /// 全局运行时状态
@@ -481,6 +583,28 @@ mod hermes_runtime_tests {
 
         std::fs::remove_file(&entrypoint).expect("remove Hermes entrypoint");
         assert!(hermes_agent_bundle_needs_refresh(&runtime_dir, expected));
+    }
+
+    #[test]
+    fn refreshes_the_previous_kuaifan_hermes_bundle_revision() {
+        let temp = tempfile::tempdir().expect("temporary Hermes runtime");
+        let runtime_dir = temp.path().join("hermes");
+        let entrypoint = runtime_dir.join("hermes_cli").join("main.py");
+        std::fs::create_dir_all(entrypoint.parent().expect("entrypoint parent"))
+            .expect("create Hermes entrypoint directory");
+        std::fs::write(&entrypoint, b"dashboard").expect("write Hermes entrypoint");
+
+        let previous_marker = format!(
+            "0.18.2-kfc.4|kuaifanclaw-{}\n",
+            env!("CARGO_PKG_VERSION")
+        );
+        std::fs::write(runtime_dir.join(".bundle_version"), previous_marker)
+            .expect("write previous marker");
+
+        assert!(hermes_agent_bundle_needs_refresh(
+            &runtime_dir,
+            &hermes_agent_bundle_marker()
+        ));
     }
 
     #[test]
@@ -714,7 +838,12 @@ fn build_hermes_gateway_sidecar_command(
         .args(["-m", "hermes_cli.main", "gateway", "run", "--force", "--accept-hooks"])
         .current_dir(cwd)
         .stdin(Stdio::null());
-    configure_hermes_browser_environment(&mut command, &hermes_home_dir(data_base))?;
+    let managed_path = build_deps_env_path(data_base);
+    configure_hermes_browser_environment(&mut command, &hermes_home_dir(data_base), &managed_path)?;
+    if let Ok(bash) = ensure_hermes_git_bash(data_base) {
+        command.env("HERMES_GIT_BASH_PATH", bash);
+    }
+    command.env("PATH", &managed_path);
     Ok(command)
 }
 
@@ -734,7 +863,7 @@ fn spawn_hermes_gateway_sidecar(
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file_err));
     #[cfg(windows)]
-    command.creation_flags(NO_WINDOW);
+    command.creation_flags(NO_WINDOW | DETACHED_PROCESS);
     command
         .spawn()
         .map_err(|error| format!("start Hermes platform gateway: {}", error))
@@ -1039,7 +1168,15 @@ pub async fn start_runtime(
     let mut manifest = parse_runtime_manifest(&content)
         .map_err(|e| format!("解析 runtime.json 失败: {}", e))?;
 
-    if matches!(runtime_id.as_str(), "openclaw" | "hermes") {
+    if runtime_id == "infinite_canvas" {
+        crate::commands::infinite_canvas::ensure_infinite_canvas_runtime(&data_base)?;
+        // ensure 会重写 runtime.json（含 launch.command 绝对路径），需重新加载。
+        let refreshed = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("读取刷新后的无限画布 runtime.json 失败: {}", e))?;
+        manifest = parse_runtime_manifest(&refreshed)
+            .map_err(|e| format!("解析刷新后的无限画布 runtime.json 失败: {}", e))?;
+    }
+    if matches!(runtime_id.as_str(), "openclaw" | "hermes" | "infinite_canvas") {
         crate::commands::module::sync_module_configuration(&runtime_id, &data_base).await?;
     }
     if runtime_id == "hermes" {
@@ -1047,7 +1184,7 @@ pub async fn start_runtime(
     }
 
     // 分配端口
-    let (gui_port, gateway_port) = allocate_ports(&runtime_id, &manifest);
+    let (gui_port, gateway_port) = allocate_ports(&runtime_id, &manifest)?;
 
     // 检查端口冲突：Hermes 在应用重启后可能留下未被内存状态跟踪的 dashboard 进程。
     let addr = format!("127.0.0.1:{}", gui_port);
@@ -1098,6 +1235,10 @@ pub async fn start_runtime(
         ensure_hermes_browser_home(&data_base)?;
     }
 
+    if let Err(error) = ensure_managed_tool_path(&data_base) {
+        warn!("同步托管工具 PATH 失败（非致命）: {}", error);
+    }
+
     let gui_url = manifest.gui.url_template.replace("{guiPort}", &gui_port.to_string());
 
     info!(
@@ -1125,6 +1266,9 @@ pub async fn start_runtime(
                 let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("打开 python.zip: {}", e))?;
                 archive.extract(&python_dir).map_err(|e| format!("解压 python.zip: {}", e))?;
                 info!("Python 环境解压完成: {}", python_dir.display());
+                if let Err(error) = ensure_managed_tool_path(&data_base) {
+                    warn!("写入 Hermes Python 到系统 PATH 失败（非致命）: {}", error);
+                }
             } else {
                 // 无内置包，检查系统 Python
                 let check = if cfg!(windows) {
@@ -1139,8 +1283,27 @@ pub async fn start_runtime(
         }
     }
 
-    // 构建启动命令
-    let launch_cmd = manifest.launch.command.replace("{runtimeDir}", &runtime_dir.to_string_lossy());
+    // 构建启动命令。
+    // 1) 支持 {runtimeDir} 绝对路径占位符（Hermes）。
+    // 2) 相对路径命令（如 python/python.exe）相对 runtime 目录解析，
+    //    避免安装完成后仍因进程 cwd 不是 runtime 目录而误报“未找到命令”。
+    let launch_cmd_raw = manifest
+        .launch
+        .command
+        .replace("{runtimeDir}", &runtime_dir.to_string_lossy());
+    let launch_path = {
+        let candidate = PathBuf::from(&launch_cmd_raw);
+        if candidate.is_absolute() {
+            candidate
+        } else {
+            runtime_dir.join(&candidate)
+        }
+    };
+    let launch_cmd = if launch_path.is_file() {
+        launch_path.to_string_lossy().to_string()
+    } else {
+        launch_cmd_raw
+    };
     let cwd = if manifest.launch._cwd == "." {
         runtime_dir.clone()
     } else {
@@ -1168,20 +1331,38 @@ pub async fn start_runtime(
         std::fs::File::create("nul").unwrap()
     });
 
-    // 检查命令是否可用
+    // 检查命令是否可用：优先按 runtime 相对路径 / 绝对路径判断，再回退 PATH。
     let cmd_check = PathBuf::from(&launch_cmd).is_file() || if cfg!(windows) {
         Command::new("cmd").args(["/c", "where", &launch_cmd]).output().map(|o| o.status.success()).unwrap_or(false)
     } else {
         Command::new("which").arg(&launch_cmd).output().map(|o| o.status.success()).unwrap_or(false)
     };
     if !cmd_check {
-        let hint = if launch_cmd.contains("python") {
+        let hint = if runtime_id == "hermes" && launch_cmd.to_ascii_lowercase().contains("python") {
             "\n\nHermes 需要 Python 3.11+ 环境。请安装 Python 后重试: https://www.python.org/downloads/"
+        } else if runtime_id == "infinite_canvas" && launch_cmd.to_ascii_lowercase().contains("python") {
+            "\n\n无限画布运行时 Python 未就绪。请重新安装无限画布模块，或确认 data/runtimes/infinite_canvas/python/python.exe 存在。"
         } else {
             ""
         };
         return Err(format!("未找到 {} 命令，请确认已安装{hint}", launch_cmd));
     }
+
+    
+    // 无限画布：优先 pythonw.exe，避免桌面弹出控制台窗口
+    let mut launch_cmd = launch_cmd;
+    if runtime_id == "infinite_canvas" {
+        let p = PathBuf::from(&launch_cmd);
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+        if name == "python.exe" {
+            let pythonw = p.with_file_name("pythonw.exe");
+            if pythonw.is_file() {
+                launch_cmd = pythonw.to_string_lossy().to_string();
+                info!("infinite_canvas silent launch via pythonw: {}", launch_cmd);
+            }
+        }
+    }
+    // prefer_pythonw_for_silent
 
     let mut cmd = Command::new(&launch_cmd);
     cmd.args(&resolved_args)
@@ -1192,21 +1373,31 @@ pub async fn start_runtime(
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file_err));
 
+    // Inject managed tool PATH for all runtimes (python/git/bash/node).
+    let managed_path = build_deps_env_path(&data_base);
+    cmd.env("PATH", &managed_path);
+
     if runtime_id == "hermes" {
         let hermes_home = ensure_hermes_browser_home(&data_base)?;
-        configure_hermes_browser_environment(&mut cmd, &hermes_home)?;
-    // Older installed runtime.json files lack this value. The desktop GUI
-    // authenticates its REST and WebSocket calls with the same token, so it
-    // must be supplied by the launcher rather than the runtime manifest.
-    cmd.env("HERMES_DASHBOARD_SESSION_TOKEN", HERMES_DESKTOP_SESSION_TOKEN);
-}
+        configure_hermes_browser_environment(&mut cmd, &hermes_home, &managed_path)?;
+        // Hermes terminal tools require an explicit bash path on Windows.
+        // PATH alone is not enough: tools/environments/local.py reads HERMES_GIT_BASH_PATH first.
+        let bash = ensure_hermes_git_bash(&data_base)?;
+        info!("Hermes Git Bash: {}", bash.display());
+        cmd.env("HERMES_GIT_BASH_PATH", &bash);
+        // Older installed runtime.json files lack this value. The desktop GUI
+        // authenticates its REST and WebSocket calls with the same token, so it
+        // must be supplied by the launcher rather than the runtime manifest.
+        cmd.env("HERMES_DASHBOARD_SESSION_TOKEN", HERMES_DESKTOP_SESSION_TOKEN);
+    }
 
-    // 设置额外环境变量，相对路径相对于 runtime_dir 解析
+    // 设置额外环境变量，相对路径相对于 runtime_dir 解析，并替换端口占位符
     for (key, val) in &manifest.launch.env {
         let resolved_val = if val.starts_with("bin/") || val.starts_with("gui/") {
             runtime_dir.join(val).to_string_lossy().to_string()
         } else {
-            val.clone()
+            val.replace("{guiPort}", &gui_port_str)
+                .replace("{gatewayPort}", &gw_port_str)
         };
         cmd.env(key, &resolved_val);
     }
@@ -1253,6 +1444,45 @@ pub async fn start_runtime(
         }
     }
 
+    // 无限画布: 使用模块私有数据目录 + 共享 models 投影结果
+    if runtime_id == "infinite_canvas" {
+        let module_root = PathBuf::from(&data_base).join("modules").join("infinite_canvas");
+        cmd.env("INFINITE_CANVAS_HOME", &module_root);
+        cmd.env("INFINITE_CANVAS_DATA", module_root.join("data"));
+        cmd.env("INFINITE_CANVAS_ASSETS", module_root.join("assets"));
+        cmd.env("INFINITE_CANVAS_API_ENV", module_root.join("API").join(".env"));
+        cmd.env(
+            "INFINITE_CANVAS_ROUTES_FILE",
+            module_root.join("config").join("model_routes.json"),
+        );
+        // 兼容原项目部分读取路径
+        cmd.env("API_PROVIDERS_FILE", module_root.join("config").join("api_providers.json"));
+        if let Ok(env_content) = std::fs::read_to_string(module_root.join("API").join(".env")) {
+            for line in env_content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, val)) = line.split_once('=') {
+                    let key = key.trim();
+                    let val = val.trim().trim_matches('"').trim_matches('\'');
+                    // 端口由启动器统一分配，禁止被模块 .env 覆盖。
+                    if key.eq_ignore_ascii_case("PORT")
+                        || key.eq_ignore_ascii_case("INFINITE_CANVAS_PORT")
+                    {
+                        continue;
+                    }
+                    if !key.is_empty() && !val.is_empty() {
+                        cmd.env(key, val);
+                    }
+                }
+            }
+        }
+        // 最后强制写入分配端口，确保监听正确端口且不抢占其他服务
+        cmd.env("INFINITE_CANVAS_PORT", gui_port.to_string());
+        cmd.env("PORT", gui_port.to_string());
+    }
+
     // Hermes: 注入 .env 环境变量（渠道凭证等）
     if runtime_id == "hermes" {
         let env_path = PathBuf::from(&data_base).join("modules").join("hermes").join(".env");
@@ -1272,10 +1502,11 @@ pub async fn start_runtime(
         }
     }
 
-    // Windows: prevent CMD window popup
+    // Windows: prevent CMD/console window popup for python.exe and similar CUI binaries.
+    // CREATE_NO_WINDOW alone still flashes a console on some Python builds; combine with DETACHED_PROCESS.
     #[cfg(windows)]
     {
-        cmd.creation_flags(NO_WINDOW);
+        cmd.creation_flags(NO_WINDOW | DETACHED_PROCESS);
     }
 
     let mut child = cmd.spawn().map_err(|e| {
@@ -1436,10 +1667,14 @@ pub fn get_runtime_status(
     _data_dir: tauri::State<'_, crate::AppState>,
     runtime_id: String,
 ) -> Result<RuntimeInstance, String> {
+    get_runtime_status_by_id(&runtime_id)
+}
+
+pub fn get_runtime_status_by_id(runtime_id: &str) -> Result<RuntimeInstance, String> {
     ensure_state();
     let state = get_state();
     if let Some(ref s) = *state {
-        if let Some(inst) = s.instances.get(&runtime_id) {
+        if let Some(inst) = s.instances.get(runtime_id) {
             return Ok(inst.clone());
         }
     }
@@ -1448,31 +1683,117 @@ pub fn get_runtime_status(
 
 // ── 内部辅助函数 ──
 
-fn allocate_ports(runtime_id: &str, manifest: &RuntimeManifest) -> (u16, u16) {
-    // 检查是否已有分配
+fn is_port_free(port: u16) -> bool {
+    if port == 0 {
+        return true;
+    }
+    // 能 bind 说明当前空闲；连不上也可能是被占用但拒绝连接，这里以 bind 为准。
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+fn port_owned_by_other_module(runtime_id: &str, port: u16) -> bool {
+    if port == 0 {
+        return false;
+    }
+    ensure_state();
+    let state = get_state();
+    if let Some(ref s) = *state {
+        for (id, (gui, gw)) in &s.module_ports {
+            if id != runtime_id && (*gui == port || *gw == port) {
+                return true;
+            }
+        }
+        for (id, inst) in &s.instances {
+            if id != runtime_id && inst.running && (inst.gui_port == port || inst.gateway_port == port) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn pick_free_port(runtime_id: &str, preferred: u16, range_end: u16) -> Result<u16, String> {
+    if preferred == 0 {
+        return Ok(0);
+    }
+    let end = range_end.max(preferred);
+    for port in preferred..=end {
+        if port_owned_by_other_module(runtime_id, port) {
+            continue;
+        }
+        if is_port_free(port) {
+            return Ok(port);
+        }
+    }
+    Err(format!(
+        "模块 {} 在端口区间 {}-{} 内无可用端口",
+        runtime_id, preferred, end
+    ))
+}
+
+fn allocate_ports(runtime_id: &str, manifest: &RuntimeManifest) -> Result<(u16, u16), String> {
+    // 优先复用本模块已分配且仍可用的端口，避免启动后端口漂移。
     ensure_state();
     {
         let state = get_state();
         if let Some(ref s) = *state {
             if let Some((gui, gw)) = s.module_ports.get(runtime_id) {
-                return (*gui, *gw);
+                let gui_ok = *gui == 0 || (!port_owned_by_other_module(runtime_id, *gui) && is_port_free(*gui));
+                let _gw_ok = *gw == 0 || (!port_owned_by_other_module(runtime_id, *gw) && is_port_free(*gw));
+                // 若端口仍被本模块旧进程占用，后续 start 流程会清理；这里直接复用固定端口。
+                if *gui == manifest.ports.gui.default || gui_ok {
+                    return Ok((*gui, *gw));
+                }
             }
         }
     }
 
+    // 各模块使用自身默认端口，不再按“已启动模块数”整体偏移，避免无限画布抢到 Hermes/OpenClaw 端口。
     let base_gui = manifest.ports.gui.default;
     let base_gw = manifest.ports.gateway.default;
-
-    // 简单偏移：根据已有实例数分配
-    let offset = {
-        let state = get_state();
-        match *state {
-            Some(ref s) => s.module_ports.len() as u16,
-            None => 0,
-        }
+    let gui_end = manifest
+        .ports
+        .gui
+        .range
+        .as_ref()
+        .and_then(|r| r.get(1).copied())
+        .unwrap_or_else(|| base_gui.saturating_add(20));
+    let gw_end = if base_gw == 0 {
+        0
+    } else {
+        manifest
+            .ports
+            .gateway
+            .range
+            .as_ref()
+            .and_then(|r| r.get(1).copied())
+            .unwrap_or_else(|| base_gw.saturating_add(20))
     };
 
-    (base_gui + offset, base_gw + offset)
+    let gui_port = pick_free_port(runtime_id, base_gui, gui_end)?;
+    let gateway_port = if base_gw == 0 {
+        0
+    } else {
+        // gateway 不能与 gui 撞车
+        let mut chosen = None;
+        for port in base_gw..=gw_end {
+            if port == gui_port || port_owned_by_other_module(runtime_id, port) {
+                continue;
+            }
+            if is_port_free(port) {
+                chosen = Some(port);
+                break;
+            }
+        }
+        chosen.ok_or_else(|| {
+            format!(
+                "模块 {} 的 gateway 端口区间 {}-{} 内无可用端口",
+                runtime_id, base_gw, gw_end
+            )
+        })?
+    };
+
+    Ok((gui_port, gateway_port))
 }
 
 async fn wait_for_health(url: &str, timeout: Duration) -> bool {
@@ -1685,4 +2006,5 @@ pub async fn install_hermes_runtime(
 
     ensure_hermes_browser_home(&data_base)?;
     Ok(format!("安装完成: {}", runtime_dir.display()))
-}
+}use crate::env_paths::{build_deps_env_path, ensure_managed_tool_path, env_root, resolve_git_bash};
+

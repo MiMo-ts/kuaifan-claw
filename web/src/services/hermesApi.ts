@@ -18,11 +18,17 @@ import type {
   HermesStreamEvent,
   HermesToolCall,
 } from "../types/hermes";
+import { invoke } from "@tauri-apps/api/core";
 import {
   classifyAttachment,
+  extractKuaifanExportDirectories,
+  extractAssistantAttachments,
+  extractKuaifanToolAttachments,
+  mergeAssistantAttachments,
   normalizeAttachmentFallback,
   resolveAttachmentUrl,
   toPromptAttachmentIds,
+  type HermesAssistantAttachment,
 } from "./hermesAttachments";
 
 const RPC_TIMEOUT_MS = 30_000;
@@ -41,7 +47,6 @@ function isSessionNotFoundError(error: unknown): boolean {
   }
   return false;
 }
-
 
 const HERMES_DASHBOARD_SESSION_TOKEN = "kfc-desk-3463b6e3f34d0f12fc416939e9a81fc395f40f4730cfc145";
 
@@ -337,6 +342,15 @@ export class HermesApiClient {
     } catch {
       // Best effort. The local message is still marked cancelled by the caller.
     }
+  }
+
+  /** Answer a blocking clarify.request from the Hermes runtime. */
+  async respondClarify(requestId: string, answer: string): Promise<void> {
+    if (!requestId) throw new HermesApiError("clarify request_id is required");
+    await this.request("clarify.respond", {
+      request_id: requestId,
+      answer,
+    });
   }
 
   openStream(runtimeSessionId: string, listener: StreamListener): HermesStreamHandle {
@@ -702,6 +716,29 @@ export class HermesApiClient {
           status: type === "tool.failed" || payload.error ? "error" : "done",
           durationS: typeof payload.duration_s === "number" ? payload.duration_s : undefined,
         };
+      case "clarify.request": {
+        const choices = Array.isArray(payload.choices)
+          ? payload.choices
+            .map((choice: unknown) => {
+              if (typeof choice === "string") return choice.trim();
+              if (choice && typeof choice === "object") {
+                const record = choice as Record<string, unknown>;
+                for (const key of ["label", "description", "text", "title", "value", "name"]) {
+                  const value = record[key];
+                  if (typeof value === "string" && value.trim()) return value.trim();
+                }
+              }
+              return String(choice ?? "").trim();
+            })
+            .filter(Boolean)
+          : undefined;
+        return {
+          type: "clarify",
+          requestId: String(payload.request_id || payload.requestId || ""),
+          question: String(payload.question || "").trim(),
+          choices: choices?.length ? choices : undefined,
+        };
+      }
       case "session.info":
       case "session.title":
       case "session.created":
@@ -748,10 +785,32 @@ export class HermesApiClient {
     }
 
     const content = message.content ?? message.text ?? message.message ?? "";
+    const extracted = message.role === "assistant"
+      ? extractAssistantAttachments(resultText(content))
+      : { text: resultText(content), attachments: [] as HermesAssistantAttachment[] };
+    const messageAttachments = Array.isArray(message.attachments)
+      ? await Promise.all(message.attachments.map((attachment: any) =>
+        this.normalizeAttachment(attachment, runtimeSessionId),
+      ))
+      : [];
+    const toolCalls = Array.isArray(message.tool_calls)
+      ? message.tool_calls.map((tool: any) => this.normalizeToolCall(tool))
+      : undefined;
+    const exportDirectories = extractKuaifanExportDirectories(toolCalls || []);
+    const toolMedia = message.role === "assistant"
+      ? extractKuaifanToolAttachments(toolCalls || [])
+      : [];
+    const generatedAttachments = (await this.materializeAssistantAttachments(
+      mergeAssistantAttachments(extracted.attachments, toolMedia),
+    )).map((attachment) => ({
+      ...attachment,
+      exportDir: attachment.exportDir
+        || (attachment.localPath ? exportDirectories.get(attachment.localPath) : undefined),
+    }));
     return {
       id,
       role: (message.role || "user") as HermesMessage["role"],
-      content: resultText(content),
+      content: extracted.text,
       status: message.status || "done",
       ts: timestamp,
       model: typeof message.model === "string" ? message.model : undefined,
@@ -759,14 +818,8 @@ export class HermesApiClient {
       reasoningTokens: typeof message.reasoning_tokens === "number"
         ? message.reasoning_tokens
         : undefined,
-      toolCalls: Array.isArray(message.tool_calls)
-        ? message.tool_calls.map((tool: any) => this.normalizeToolCall(tool))
-        : undefined,
-      attachments: Array.isArray(message.attachments)
-        ? await Promise.all(message.attachments.map((attachment: any) =>
-          this.normalizeAttachment(attachment, runtimeSessionId),
-        ))
-        : undefined,
+      toolCalls,
+      attachments: [...messageAttachments, ...generatedAttachments],
       errorMessage: message.error_message || message.errorMessage,
     };
   }
@@ -814,6 +867,75 @@ export class HermesApiClient {
       });
       if (!response.ok) return "";
       return URL.createObjectURL(await response.blob());
+    } catch {
+      return "";
+    }
+  }
+
+  async materializeAssistantAttachments(
+    attachments: HermesAssistantAttachment[],
+  ): Promise<HermesAttachment[]> {
+    return Promise.all(attachments.map(async (attachment) => ({
+      ...attachment,
+      url: attachment.localPath
+        ? await this.materializeLocalMedia(attachment.localPath)
+        : attachment.url,
+    })));
+  }
+
+  private async materializeLocalMedia(localPath: string): Promise<string> {
+    if (!localPath) return "";
+    try {
+      const dataUrl = await invoke<string>("read_hermes_media_data_url", {
+        sourcePath: localPath,
+      });
+      if (typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
+        return this.dataUrlToObjectUrl(dataUrl) || dataUrl;
+      }
+    } catch {
+      // Fall back to image-only command for older desktop clients.
+    }
+    try {
+      const dataUrl = await invoke<string>("read_hermes_image_data_url", {
+        sourcePath: localPath,
+      });
+      if (typeof dataUrl === "string" && dataUrl.startsWith("data:image/")) {
+        return dataUrl;
+      }
+    } catch {
+      // Older desktop clients do not provide the managed local-media command.
+    }
+    try {
+      const source = new URL("/api/media", `${this.baseUrl}/`);
+      source.searchParams.set("path", localPath);
+      const token = await this.getSessionToken();
+      const response = await fetch(source.toString(), {
+        headers: token ? { "X-Hermes-Session-Token": token } : undefined,
+        credentials: "include",
+      });
+      if (!response.ok) return "";
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const payload = await response.json();
+        const dataUrl = typeof payload?.data_url === "string" ? payload.data_url : "";
+        return this.dataUrlToObjectUrl(dataUrl) || dataUrl;
+      }
+      return URL.createObjectURL(await response.blob());
+    } catch {
+      return "";
+    }
+  }
+
+  private dataUrlToObjectUrl(dataUrl: string): string {
+    if (!dataUrl.startsWith("data:") || !dataUrl.includes(";base64,")) return "";
+    try {
+      const [meta, b64] = dataUrl.split(",", 2);
+      const mime = meta.slice(5, meta.indexOf(";")) || "application/octet-stream";
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      // Object URLs keep large video payloads out of the DOM attribute size path.
+      return URL.createObjectURL(new Blob([bytes], { type: mime }));
     } catch {
       return "";
     }

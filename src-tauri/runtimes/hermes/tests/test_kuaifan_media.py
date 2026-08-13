@@ -78,6 +78,27 @@ class KuaifanMediaCollectorTests(unittest.TestCase):
                 else:
                     os.environ["HERMES_HOME"] = previous_home
 
+    def test_collects_only_a_current_turn_managed_kuaifan_video_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            video_path = home / "video_cache" / "kuaifan-video" / "result.mp4"
+            video_path.parent.mkdir(parents=True)
+            video_path.write_bytes(b"mp4")
+            artifact = {"artifact": "kuaifan-video/v1", "video_path": str(video_path)}
+            previous_home = os.environ.get("HERMES_HOME")
+            os.environ["HERMES_HOME"] = str(home)
+            try:
+                tags = run._collect_kuaifan_video_media_tags(
+                    [{"role": "tool", "content": json.dumps(artifact)}]
+                )
+            finally:
+                if previous_home is None:
+                    os.environ.pop("HERMES_HOME", None)
+                else:
+                    os.environ["HERMES_HOME"] = previous_home
+
+        self.assertEqual(tags, [f"MEDIA:{video_path.resolve()}"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

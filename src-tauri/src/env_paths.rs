@@ -106,6 +106,91 @@ pub fn git_exists(env_dir: &Path) -> bool {
     git_exe(env_dir).exists()
 }
 
+/// Git Bash (required by Hermes terminal tools on Windows).
+/// Supports PortableGit (`bin/bash.exe`) and full Git for Windows layouts
+/// (`usr/bin/bash.exe`). MinGit alone does not ship bash.
+#[cfg(windows)]
+pub fn git_bash_candidates(env_dir: &Path) -> Vec<PathBuf> {
+    let git_root = env_dir.join("git");
+    vec![
+        git_root.join("bin").join("bash.exe"),
+        git_root.join("usr").join("bin").join("bash.exe"),
+        git_root.join("git-bash.exe"),
+    ]
+}
+
+#[cfg(not(windows))]
+pub fn git_bash_candidates(env_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        env_dir.join("git").join("bin").join("bash"),
+        PathBuf::from("/bin/bash"),
+        PathBuf::from("/usr/bin/bash"),
+    ]
+}
+
+#[cfg(windows)]
+pub fn git_bash_exe(env_dir: &Path) -> PathBuf {
+    git_bash_candidates(env_dir)
+        .into_iter()
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| env_dir.join("git").join("bin").join("bash.exe"))
+}
+
+#[cfg(not(windows))]
+pub fn git_bash_exe(env_dir: &Path) -> PathBuf {
+    git_bash_candidates(env_dir)
+        .into_iter()
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from("/bin/bash"))
+}
+
+pub fn git_bash_exists(env_dir: &Path) -> bool {
+    git_bash_candidates(env_dir).iter().any(|p| p.is_file())
+}
+
+/// Resolve bash for Hermes: managed PortableGit/Git first, then common system paths.
+pub fn resolve_git_bash(data_dir: &str) -> Option<PathBuf> {
+    let env_dir = env_root(data_dir);
+    if let Some(p) = git_bash_candidates(&env_dir).into_iter().find(|p| p.is_file()) {
+        return Some(p);
+    }
+
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let hermes_git = PathBuf::from(local).join("hermes").join("git");
+        for rel in ["bin/bash.exe", "usr/bin/bash.exe"] {
+            let candidate = hermes_git.join(rel);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let mut bases = Vec::new();
+        if let Ok(v) = std::env::var("ProgramFiles") {
+            bases.push(v);
+        }
+        let pf86 = format!("ProgramFiles{}", "(x86)");
+        if let Ok(v) = std::env::var(&pf86) {
+            bases.push(v);
+        }
+        bases.push(r"C:\Program Files".to_string());
+        bases.push(r"C:\Program Files (x86)".to_string());
+        for base in bases {
+            for rel in [r"Git\bin\bash.exe", r"Git\usr\bin\bash.exe"] {
+                let candidate = PathBuf::from(&base).join(rel);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+
 #[cfg(windows)]
 fn node_executable_in_portable_root(root: &Path) -> PathBuf {
     root.join("node.exe")
@@ -319,68 +404,213 @@ pub fn resolve_git(data_dir: &str) -> (PathBuf, bool) {
     (bundled_path, false)
 }
 
-/// 构建依赖安装子进程的 PATH 环境变量。
+/// Collect managed tool directories that should be visible to OpenClaw / Hermes child processes.
 ///
-/// 规则：
-/// - 若 Node 来自系统 PATH：不修改 PATH（保留用户系统环境）
-/// - 若 Node 来自内置：将内置目录 prepend 到 PATH 前
-/// - Windows 上同时追加内置 Git cmd 目录（部分依赖构建需调用 git）
-pub fn build_deps_env_path(data_dir: &str) -> String {
-    let system_path = std::env::var("PATH").unwrap_or_default();
-
-    let Some(node_root) = resolve_node_bin_dir_for_path(data_dir) else {
-        // 系统 PATH 的 node，但 macOS GUI 应用 PATH 可能不完整，需要确保常见路径存在
-        #[cfg(target_os = "macos")]
-        {
-            let mut prepend = String::new();
-            // 无论是否有 Homebrew，都要确保 /usr/local/bin 在 PATH 中（官网 pkg 安装的 node）
-            if !system_path.contains("/usr/local/bin") {
-                prepend = format!("{}:", "/usr/local/bin");
-            }
-            // Homebrew 路径也要添加
-            if !system_path.contains("/opt/homebrew/bin") && Path::new("/opt/homebrew/bin").is_dir() {
-                prepend.push_str("/opt/homebrew/bin:");
-            }
-            if prepend.is_empty() {
-                return system_path;
-            }
-            return format!("{}{}", prepend, system_path);
+/// Windows order (front = highest priority):
+/// 1. Hermes embedded Python (+ Scripts)
+/// 2. MinGit cmd (git.exe)
+/// 3. MinGit usr/bin (bash.exe / sh.exe)
+/// 4. MinGit mingw64/bin
+/// 5. Portable Node root
+pub fn managed_tool_dirs(data_dir: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut push_dir = |dir: PathBuf| {
+        if dir.is_dir() && !dirs.iter().any(|existing| existing == &dir) {
+            dirs.push(dir);
         }
-        return system_path;
     };
 
-    let mut prepend = node_root.to_string_lossy().to_string();
+    let hermes_python = PathBuf::from(data_dir)
+        .join("runtimes")
+        .join("hermes")
+        .join("python");
+    push_dir(hermes_python.join("Scripts"));
+    push_dir(hermes_python.clone());
 
+    let env_dir = env_root(data_dir);
     #[cfg(windows)]
     {
-        let env_dir = env_root(data_dir);
-        let git_cmd_dir = env_dir.join("git").join("cmd");
-        if git_cmd_dir.is_dir() {
-            prepend = format!("{};{}", git_cmd_dir.to_string_lossy(), prepend);
+        let git_root = env_dir.join("git");
+        push_dir(git_root.join("cmd"));
+        push_dir(git_root.join("bin")); // PortableGit bash/sh
+        push_dir(git_root.join("usr").join("bin"));
+        push_dir(git_root.join("mingw64").join("bin"));
+    }
+    #[cfg(not(windows))]
+    {
+        push_dir(env_dir.join("git").join("bin"));
+    }
+
+    if let Some(node_root) = resolve_node_bin_dir_for_path(data_dir) {
+        push_dir(node_root);
+    } else if node_exists(&env_dir) {
+        push_dir(portable_node_root(&env_dir));
+    }
+
+    // Keep portable roots even when resolve_node prefers a system install, so
+    // agents still get bash/python from kuaifanclaw bundles.
+    #[cfg(windows)]
+    {
+        if portable_node_root(&env_dir).join("node.exe").is_file() {
+            push_dir(portable_node_root(&env_dir));
         }
     }
+
+    dirs
+}
+
+fn path_entry_present(path_value: &str, candidate: &Path) -> bool {
+    let candidate_norm = candidate.to_string_lossy().trim_end_matches(['\\', '/']).to_string();
+    #[cfg(windows)]
+    let candidate_cmp = candidate_norm.to_ascii_lowercase();
+    #[cfg(not(windows))]
+    let candidate_cmp = candidate_norm.clone();
+
+    std::env::split_paths(path_value).any(|existing| {
+        let existing_norm = existing.to_string_lossy().trim_end_matches(['\\', '/']).to_string();
+        #[cfg(windows)]
+        {
+            existing_norm.to_ascii_lowercase() == candidate_cmp
+        }
+        #[cfg(not(windows))]
+        {
+            existing_norm == candidate_cmp
+        }
+    })
+}
+
+/// Build PATH for OpenClaw / Hermes child processes.
+/// Always prepends managed Node / MinGit(bash) / Hermes Python when present.
+pub fn build_deps_env_path(data_dir: &str) -> String {
+    let system_path = std::env::var("PATH").unwrap_or_default();
+    let managed = managed_tool_dirs(data_dir);
+    let mut prepend: Vec<String> = managed
+        .into_iter()
+        .map(|dir| dir.to_string_lossy().to_string())
+        .collect();
 
     #[cfg(target_os = "macos")]
     {
-        // macOS 上确保 /usr/local/bin 在 PATH 前（官网 pkg 安装）
-        if !prepend.contains("/usr/local/bin") {
-            prepend = format!("{}:{}", "/usr/local/bin", prepend);
+        if !system_path.contains("/usr/local/bin") {
+            prepend.push("/usr/local/bin".to_string());
         }
-        // Homebrew 路径也要添加
-        if !prepend.contains("/opt/homebrew/bin") && Path::new("/opt/homebrew/bin").is_dir() {
-            prepend.push_str("/opt/homebrew/bin:");
+        if !system_path.contains("/opt/homebrew/bin") && Path::new("/opt/homebrew/bin").is_dir() {
+            prepend.push("/opt/homebrew/bin".to_string());
         }
-        return format!("{}:{}", prepend, system_path);
     }
 
-    format!("{};{}", prepend, system_path)
+    if prepend.is_empty() {
+        return system_path;
+    }
+
+    let mut parts = prepend;
+    if !system_path.trim().is_empty() {
+        parts.push(system_path);
+    }
+    parts.join(if cfg!(windows) { ";" } else { ":" })
 }
 
-/// 将 zip 内相对路径安全拼到 `dest` 下。
-///
-/// **Windows 关键**：`PathBuf::join("/node.exe")` 会把路径变成「带根组件」，整段前缀被替换，
-/// 文件会落到当前盘符根目录（如 `D:\\node.exe`），而不是 `dest` 下。此处按 `/`、`\` 分段 `push`，
-/// 且禁止 `..`、盘符与绝对路径片段。
+/// Apply managed tool dirs to the current process PATH so subsequent
+/// `Command` launches inherit them even without explicit env overrides.
+pub fn apply_managed_tool_path_to_current_process(data_dir: &str) {
+    let next = build_deps_env_path(data_dir);
+    std::env::set_var("PATH", next);
+}
+
+/// Persist managed OpenClaw/Hermes tool directories into the current user's PATH.
+/// Uses HKCU (no admin). Safe to call repeatedly; de-duplicates existing entries.
+#[cfg(windows)]
+pub fn persist_managed_tool_path(data_dir: &str) -> Result<usize, String> {
+    let dirs = managed_tool_dirs(data_dir);
+    if dirs.is_empty() {
+        return Ok(0);
+    }
+
+    let dir_literals: Vec<String> = dirs
+        .iter()
+        .map(|dir| dir.to_string_lossy().replace('\'', "''"))
+        .collect();
+    let dirs_ps = dir_literals
+        .iter()
+        .map(|dir| format!("'{}'", dir))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+$dirs = @({dirs_ps})
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($null -eq $userPath) {{ $userPath = '' }}
+$parts = @()
+if (-not [string]::IsNullOrWhiteSpace($userPath)) {{
+  $parts = @($userPath -split ';' | Where-Object {{ -not [string]::IsNullOrWhiteSpace($_) }})
+}}
+$added = 0
+foreach ($dir in $dirs) {{
+  if ([string]::IsNullOrWhiteSpace($dir)) {{ continue }}
+  if (-not (Test-Path -LiteralPath $dir)) {{ continue }}
+  $exists = $false
+  foreach ($part in $parts) {{
+    if ($part.TrimEnd('\','/') -ieq $dir.TrimEnd('\','/')) {{ $exists = $true; break }}
+  }}
+  if (-not $exists) {{
+    $parts = @($dir) + $parts
+    $added++
+  }}
+}}
+if ($added -gt 0) {{
+  $next = ($parts -join ';')
+  [Environment]::SetEnvironmentVariable('Path', $next, 'User')
+}}
+Write-Output $added
+"#
+    );
+
+    let output = hidden_cmd::powershell()
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .output()
+        .map_err(|error| format!("persist managed PATH failed: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "persist managed PATH failed (status {:?}): {}",
+            output.status.code(),
+            stderr.trim()
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let added = stdout.parse::<usize>().unwrap_or(0);
+    apply_managed_tool_path_to_current_process(data_dir);
+    if added > 0 {
+        info!("已将 {} 个快泛claw 托管工具目录写入当前用户 PATH", added);
+    } else {
+        info!("快泛claw 托管工具目录已在当前用户 PATH 中");
+    }
+    Ok(added)
+}
+
+#[cfg(not(windows))]
+pub fn persist_managed_tool_path(data_dir: &str) -> Result<usize, String> {
+    apply_managed_tool_path_to_current_process(data_dir);
+    Ok(0)
+}
+
+/// Convenience: refresh process PATH + persist user PATH after env unpack.
+pub fn ensure_managed_tool_path(data_dir: &str) -> Result<usize, String> {
+    apply_managed_tool_path_to_current_process(data_dir);
+    persist_managed_tool_path(data_dir)
+}
+
+
 pub fn join_under_dest(dest: &Path, zip_rel: &str) -> Result<PathBuf, String> {
     let normalized = zip_rel.replace('\\', "/");
     let trimmed = normalized
@@ -445,6 +675,8 @@ fn dest_has_node_extract_layout(dest: &Path) -> bool {
 
 #[cfg(windows)]
 fn dest_has_git_extract_layout(dest: &Path) -> bool {
+    // PortableGit / Git for Windows both ship cmd/git.exe.
+    // Hermes additionally needs bash.exe (PortableGit: bin/bash.exe).
     dest.join("cmd").join("git.exe").is_file()
 }
 
@@ -839,6 +1071,67 @@ pub async fn git_clone_with_exe(
                 "git clone 失败（退出码 {:?}），请检查网络",
                 status.code()
             ))
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod managed_path_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn managed_tool_dirs_include_hermes_python_and_git_bash() {
+        let temp = tempdir().unwrap();
+        let data = temp.path();
+        let hermes_python = data.join("runtimes").join("hermes").join("python");
+        let git_cmd = data.join("env").join("git").join("cmd");
+        let git_usr = data.join("env").join("git").join("usr").join("bin");
+        let node_root = data.join("env").join("node");
+        fs::create_dir_all(&hermes_python).unwrap();
+        fs::create_dir_all(&git_cmd).unwrap();
+        fs::create_dir_all(&git_usr).unwrap();
+        fs::create_dir_all(&node_root).unwrap();
+        #[cfg(windows)]
+        fs::write(node_root.join("node.exe"), b"").unwrap();
+        #[cfg(not(windows))]
+        {
+            fs::create_dir_all(node_root.join("bin")).unwrap();
+            fs::write(node_root.join("bin").join("node"), b"").unwrap();
+        }
+
+        let dirs = managed_tool_dirs(&data.to_string_lossy());
+        let joined = dirs
+            .iter()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .collect::<Vec<_>>();
+        assert!(joined.iter().any(|p| p.ends_with("runtimes/hermes/python")));
+        assert!(joined.iter().any(|p| p.ends_with("env/git/cmd") || p.ends_with("env/git/bin")));
+        #[cfg(windows)]
+        assert!(joined.iter().any(|p| p.ends_with("env/git/usr/bin")));
+    }
+
+    #[test]
+    fn build_deps_env_path_prepends_managed_dirs_with_separators() {
+        let temp = tempdir().unwrap();
+        let data = temp.path();
+        let hermes_python = data.join("runtimes").join("hermes").join("python");
+        let git_cmd = data.join("env").join("git").join("cmd");
+        fs::create_dir_all(&hermes_python).unwrap();
+        fs::create_dir_all(&git_cmd).unwrap();
+
+        let path = build_deps_env_path(&data.to_string_lossy());
+        let hermes = hermes_python.to_string_lossy().to_string();
+        let git = git_cmd.to_string_lossy().to_string();
+        assert!(path.contains(&hermes), "path missing hermes python: {path}");
+        assert!(path.contains(&git), "path missing git cmd: {path}");
+        #[cfg(windows)]
+        {
+            assert!(path.contains(&format!("{hermes};")) || path.starts_with(&hermes));
+            // ensure no accidental glue of directories without separators
+            assert!(!path.contains(&format!("{}C:", git.trim_end_matches('\\'))));
         }
     }
 }

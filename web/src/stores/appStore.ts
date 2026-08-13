@@ -52,8 +52,8 @@ interface AppState {
   setOpenclawSetupDone: (v: boolean) => void;
 
   // Module switching
-  activeModule: "openclaw" | "hermes" | "codex" | "claude";
-  setActiveModule: (m: "openclaw" | "hermes" | "codex" | "claude") => void;
+  activeModule: "openclaw" | "hermes" | "codex" | "claude" | "infinite_canvas";
+  setActiveModule: (m: "openclaw" | "hermes" | "codex" | "claude" | "infinite_canvas") => void;
   codexInstalled: boolean;
   setCodexInstalled: (v: boolean) => void;
 }
@@ -142,7 +142,7 @@ export const useAppStore = create<AppState>()(
       setOpenclawSetupDone: (v) => set({ openclawSetupDone: v }),
 
       // Module switching
-      activeModule: "openclaw" as "openclaw" | "hermes" | "codex" | "claude",
+      activeModule: "openclaw" as "openclaw" | "hermes" | "codex" | "claude" | "infinite_canvas",
       setActiveModule: (m) => set({ activeModule: m }),
       codexInstalled: false,
       setCodexInstalled: (v) => set({ codexInstalled: v }),
