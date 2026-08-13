@@ -112,3 +112,4 @@ win/_hermes-tmp*/
 
 # Bundled zip exceptions
 !src-tauri/bundled-infinite-canvas/*.zip
+!src-tauri/bundled-codex/*.exe
